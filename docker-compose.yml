@@ -1,0 +1,131 @@
+services:
+
+  # ── Ollama (your existing service) ─────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./scripts/ollama-entrypoint.sh:/ollama-entrypoint.sh
+    entrypoint: ["/bin/bash", "/ollama-entrypoint.sh"]
+    environment:
+      - OLLAMA_MODELS=nomic-embed-text llama3.2
+    networks:
+      - bus_agent_net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15
+    container_name: bus_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-bus_booking}
+      TZ: Asia/Kuala_Lumpur
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # data persists across restarts
+    # ports:
+    #   - "5432:5432"                               # expose for local DB tools (DBeaver etc.)
+    networks:
+      - bus_agent_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Streamlit Admin Panel ───────────────────────────────────────────────────
+  streamlit:
+    build:
+      context: ./admin_panel                      # folder with your Streamlit code
+      dockerfile: Dockerfile
+    container_name: bus_admin
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-bus_booking}
+      TZ: Asia/Kuala_Lumpur
+    ports:
+      - "8501:8501"
+    networks:
+      - bus_agent_net
+    depends_on:
+      postgres:
+        condition: service_healthy               # wait for postgres to be ready
+    volumes:
+      - ./admin_panel:/app                       # hot reload — edit code without rebuild
+      - ./utils:/utils                           # share utils module
+      - ./image:/image
+
+  chat:
+    build:
+      context: ./chat_app
+      dockerfile: Dockerfile
+    container_name: bus_chat
+    restart: unless-stopped
+    environment:
+      FASTAPI_URL: http://fastapi:8000
+      TZ: Asia/Kuala_Lumpur
+    ports:
+      - "8470:8502"
+    networks:
+      - bus_agent_net
+    depends_on:
+      - fastapi
+    volumes:
+      - ./chat_app:/app                          # hot reload
+      - ./utils:/utils                           # share utils module
+      - ./image:/image
+
+  fastapi:
+    build:
+      context: ./fastapi_app
+      dockerfile: Dockerfile
+    container_name: bus_api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-bus_booking}
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      CHROMA_PATH: /data/chroma
+      TZ: Asia/Kuala_Lumpur
+    ports:
+      - "7500:8000"
+    networks:
+      - bus_agent_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./fastapi_app:/app                       # hot reload
+      - ./admin_panel:/app/../admin_panel        # share DB models
+      - chroma_data:/data/chroma                 # persist FAQ embeddings
+
+# ── Networks ────────────────────────────────────────────────────────────────
+networks:
+  bus_agent_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+# ── Volumes ─────────────────────────────────────────────────────────────────
+volumes:
+  ollama_data:
+  postgres_data:                                 # persists your DB data
+  chroma_data:                                   # persists FAQ embeddings
