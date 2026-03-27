@@ -10,7 +10,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
 from seat_map_generator import generate_seat_map_bytes, SeatMapConfig
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-FASTAPI_URL = "http://fastapi:8000"
+FASTAPI_URL = os.getenv("FASTAPI_URL", "http://fastapi:8000")
 
 st.set_page_config(
     page_title="BusGo Agent",
@@ -20,11 +20,11 @@ st.set_page_config(
 )
 
 # ── Custom CSS - Agent Style ──────────────────────────────────────────────────
-st.markdown("""
+@st.cache_data
+def get_app_css():
+    return """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+html, body, [class*="css"] { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
 
 .main { background: #ffffff; }
 
@@ -195,34 +195,237 @@ footer {visibility: hidden;}
 .receipt-label { color: #6b7280; }
 .receipt-value { font-weight: 600; color: #111827; }
 
-/* Sidebar */
+/* ═══ Sidebar - Modern Dark Gradient ═══ */
 [data-testid="stSidebar"] {
-    background: #f9fafb;
-    border-right: 1px solid #e5e7eb;
+    background: linear-gradient(180deg, #0f0a1e 0%, #1a1145 35%, #12103a 70%, #0d0b2e 100%) !important;
+    border-right: 1px solid rgba(99, 102, 241, 0.15);
+    box-shadow: 4px 0 30px rgba(0, 0, 0, 0.2);
+}
+[data-testid="stSidebar"] > div:first-child {
+    background: transparent;
+    padding-top: 1.5rem;
 }
 
-/* Command buttons in sidebar */
-.stButton > button {
-    border-radius: 8px;
+/* Sidebar typography */
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] li {
+    color: #cbd5e1;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+    color: #ffffff !important;
+    font-weight: 700;
+    font-size: 1.25rem;
+    letter-spacing: -0.01em;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] strong {
+    color: #a5b4fc !important;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+/* Sidebar dividers */
+[data-testid="stSidebar"] hr {
+    border-color: rgba(99, 102, 241, 0.15) !important;
+    margin: 0.75rem 0;
+}
+
+/* Sidebar header branding */
+.sidebar-brand {
+    padding: 0.5rem 0 1rem 0;
+    margin-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(99, 102, 241, 0.15);
+}
+.sidebar-brand h3 {
+    font-size: 1.3rem;
+    font-weight: 800;
+    margin: 0;
+    background: linear-gradient(135deg, #818cf8 0%, #a78bfa 50%, #c084fc 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -0.02em;
+}
+.sidebar-brand p {
+    font-size: 0.65rem;
+    color: #64748b;
+    margin: 0.25rem 0 0 0;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+/* Sidebar section labels */
+.sidebar-section {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: #6366f1 !important;
+    padding: 0.75rem 0 0.35rem 0.25rem;
+    font-weight: 700;
+}
+
+/* Sidebar command buttons */
+[data-testid="stSidebar"] .stButton > button {
+    background: rgba(99, 102, 241, 0.06) !important;
+    border: 1px solid rgba(99, 102, 241, 0.15) !important;
+    border-radius: 10px !important;
+    color: #e2e8f0 !important;
     font-weight: 500;
-    transition: all 0.2s;
+    font-size: 0.875rem;
+    padding: 0.55rem 0.9rem;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    text-align: left;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: rgba(99, 102, 241, 0.16) !important;
+    border-color: rgba(99, 102, 241, 0.4) !important;
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.12);
+    transform: translateX(3px);
+    color: #ffffff !important;
+}
+[data-testid="stSidebar"] .stButton > button:active {
+    transform: translateX(1px);
 }
 
-/* Typing indicator */
+/* Sidebar scrollbar */
+[data-testid="stSidebar"] > div:first-child::-webkit-scrollbar {
+    width: 4px;
+}
+[data-testid="stSidebar"] > div:first-child::-webkit-scrollbar-track {
+    background: transparent;
+}
+[data-testid="stSidebar"] > div:first-child::-webkit-scrollbar-thumb {
+    background: rgba(99, 102, 241, 0.25);
+    border-radius: 10px;
+}
+[data-testid="stSidebar"] > div:first-child {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(99, 102, 241, 0.25) transparent;
+}
+
+/* Language radio pills */
+[data-testid="stSidebar"] .stRadio > div {
+    gap: 4px;
+}
+[data-testid="stSidebar"] .stRadio label {
+    color: #a5b4fc !important;
+    font-weight: 500;
+    font-size: 0.85rem;
+}
+[data-testid="stSidebar"] .stRadio label span {
+    color: #a5b4fc !important;
+}
+
+/* New Chat button - distinct accent */
+.new-chat-btn .stButton > button {
+    background: rgba(99, 102, 241, 0.12) !important;
+    border: 1px dashed rgba(99, 102, 241, 0.35) !important;
+    color: #818cf8 !important;
+}
+.new-chat-btn .stButton > button:hover {
+    background: rgba(99, 102, 241, 0.22) !important;
+    border-style: solid !important;
+    border-color: #6366f1 !important;
+    box-shadow: 0 0 24px rgba(99, 102, 241, 0.18);
+}
+
+/* Sidebar collapse button */
+[data-testid="stSidebar"] button[kind="header"] {
+    color: #818cf8 !important;
+    transition: color 0.2s ease, transform 0.2s ease;
+}
+[data-testid="stSidebar"] button[kind="header"]:hover {
+    color: #ffffff !important;
+    transform: scale(1.1);
+    background: transparent !important;
+}
+
+/* Thinking indicator - Modern LLM style */
+.thinking-container {
+    display: flex;
+    gap: 12px;
+    margin: 16px 0;
+    align-items: flex-start;
+    animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.thinking-bubble {
+    background: #f3f4f6;
+    border-radius: 16px;
+    border-bottom-left-radius: 4px;
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.thinking-dots {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+.thinking-dot {
+    width: 8px;
+    height: 8px;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    border-radius: 50%;
+    animation: pulse 1.4s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(1) { animation-delay: 0s; }
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes pulse {
+    0%, 80%, 100% {
+        transform: scale(0.8);
+        opacity: 0.5;
+    }
+    40% {
+        transform: scale(1.2);
+        opacity: 1;
+    }
+}
+
+.thinking-text {
+    font-size: 13px;
+    color: #6b7280;
+    font-weight: 500;
+}
+
+/* Shimmer effect for processing */
+.thinking-shimmer {
+    background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 50%, #f3f4f6 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Legacy typing indicator */
 .typing-indicator {
     display: flex;
     gap: 4px;
     padding: 12px 16px;
 }
-.typing-dot {
+.typing-dot-legacy {
     width: 8px;
     height: 8px;
     background: #9ca3af;
     border-radius: 50%;
     animation: typing 1.4s infinite;
 }
-.typing-dot:nth-child(2) { animation-delay: 0.2s; }
-.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+.typing-dot-legacy:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot-legacy:nth-child(3) { animation-delay: 0.4s; }
 @keyframes typing {
     0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
     30% { transform: translateY(-4px); opacity: 1; }
@@ -232,8 +435,63 @@ footer {visibility: hidden;}
 [data-testid="stChatInput"] {
     border-radius: 12px;
 }
+
+/* ═══ Login Screen ═══ */
+.login-card {
+    max-width: 420px;
+    margin: 8vh auto 0 auto;
+    background: linear-gradient(135deg, #0f0a1e 0%, #1a1145 50%, #12103a 100%);
+    border-radius: 20px;
+    padding: 40px 36px 36px 36px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3), 0 0 40px rgba(99,102,241,0.08);
+    border: 1px solid rgba(99,102,241,0.15);
+}
+.login-logo {
+    text-align: center;
+    margin-bottom: 8px;
+    font-size: 2rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #818cf8 0%, #a78bfa 50%, #c084fc 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -0.02em;
+}
+.login-subtitle {
+    text-align: center;
+    font-size: 0.8rem;
+    color: #64748b;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 28px;
+}
+
+/* Hide sidebar on login */
+.hide-sidebar [data-testid="stSidebar"] { display: none; }
+.hide-sidebar [data-testid="collapsedControl"] { display: none; }
+
+/* User info card in sidebar */
+.user-card {
+    background: rgba(99,102,241,0.08);
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin: 8px 0 4px 0;
+}
+.user-card-name {
+    color: #e2e8f0;
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+.user-card-phone {
+    color: #94a3b8;
+    font-size: 0.75rem;
+    margin-top: 2px;
+}
 </style>
-""", unsafe_allow_html=True)
+"""
+
+st.markdown(get_app_css(), unsafe_allow_html=True)
 
 
 # ── Session State ──────────────────────────────────────────────────────────────
@@ -248,10 +506,55 @@ for key, val in {
     "seat_info": None,          # Seat availability data
     "book_schedules": [],       # Schedules found in booking flow
     "pending_booking": None,    # Pending booking awaiting confirmation
+    "logged_in": False,
+    "passenger_id": None,
+    "passenger_name": "",
+    "passenger_phone": "",
+    "is_new_user": False,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
+
+# ── Login Gate ─────────────────────────────────────────────────────────────────
+if not st.session_state.logged_in:
+    # Hide sidebar
+    st.markdown('<style>[data-testid="stSidebar"]{display:none}[data-testid="collapsedControl"]{display:none}</style>', unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="login-card">
+        <div class="login-logo">🚌 BusGo</div>
+        <div class="login-subtitle">Your Travel Assistant</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.form("login_form"):
+        login_name = st.text_input("Your Name", placeholder="e.g. Ahmad bin Ali")
+        login_phone = st.text_input("Phone Number", placeholder="e.g. 0123456789")
+        submitted = st.form_submit_button("🚀 Start Chatting", use_container_width=True, type="primary")
+
+        if submitted:
+            if not login_name or not login_phone:
+                st.error("Please enter your name and phone number.")
+            else:
+                try:
+                    resp = requests.post(
+                        f"{FASTAPI_URL}/auth/login",
+                        json={"name": login_name.strip(), "phone": login_phone.strip()},
+                        timeout=10,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    st.session_state.logged_in = True
+                    st.session_state.passenger_id = data["id"]
+                    st.session_state.passenger_name = data["name"]
+                    st.session_state.passenger_phone = data["phone"]
+                    st.session_state.is_new_user = data.get("is_new", False)
+                    st.rerun()
+                except Exception:
+                    st.error("Could not connect to server. Please try again.")
+
+    st.stop()
 
 # ── Language ───────────────────────────────────────────────────────────────────
 T = {
@@ -279,7 +582,7 @@ def add_msg(role, content, extra=None):
     st.session_state.messages.append({"role": role, "content": content, **(extra or {})})
 
 
-def render_message(msg, is_latest=False):
+def render_message(msg, is_latest=False, msg_index=0):
     """Render a single message in agent chat style."""
     role = msg["role"]
     content = msg["content"]
@@ -308,7 +611,7 @@ def render_message(msg, is_latest=False):
 
         # Render booking result if present
         if msg.get("booking"):
-            render_booking_result(msg["booking"], is_latest)
+            render_booking_result(msg["booking"], is_latest, msg_index=msg_index)
 
 
 def render_schedule_cards(schedules):
@@ -334,13 +637,24 @@ def render_schedule_cards(schedules):
         """, unsafe_allow_html=True)
 
 
-def render_booking_result(data, expanded=True):
+def render_booking_result(data, expanded=True, msg_index=0):
     """Render booking result with payment info."""
     booking = data.get("booking", {})
     payment = data.get("payment_info", {})
     message = data.get("message", "")
 
-    with st.expander(f"🎫 Booking #{booking.get('booking_id')} - Pending Payment", expanded=expanded):
+    # Determine status display
+    status = booking.get('status', 'pending_payment')
+    status_map = {
+        "confirmed": ("Confirmed", "✅ Confirmed", "#22c55e"),
+        "pending_payment": ("Pending Payment", "⏳ Pending Payment", "#f59e0b"),
+        "cancelled": ("Cancelled", "❌ Cancelled", "#ef4444"),
+    }
+    status_label, status_display, status_color = status_map.get(
+        status, (status.replace("_", " ").title(), status, "#6b7280")
+    )
+
+    with st.expander(f"🎫 Booking #{booking.get('booking_id')} - {status_label}", expanded=expanded):
         # Booking details
         st.markdown(f"""
         <div class="receipt-card">
@@ -350,40 +664,57 @@ def render_booking_result(data, expanded=True):
             <div class="receipt-row"><span class="receipt-label">Route</span><span class="receipt-value">{booking.get('origin')} → {booking.get('destination')}</span></div>
             <div class="receipt-row"><span class="receipt-label">Departure</span><span class="receipt-value">{booking.get('departure_time')}</span></div>
             <div class="receipt-row"><span class="receipt-label">Seat</span><span class="receipt-value">{booking.get('seat_number')}</span></div>
-            <div class="receipt-row"><span class="receipt-label">Status</span><span class="receipt-value" style="color:#f59e0b">⏳ Pending Payment</span></div>
+            <div class="receipt-row"><span class="receipt-label">Status</span><span class="receipt-value" style="color:{status_color}">{status_display}</span></div>
         </div>
         """, unsafe_allow_html=True)
 
-        # Payment info
-        if payment:
-            st.markdown(f"""
-            <div class="payment-card">
-                <div class="payment-header">💳 Payment Instructions</div>
-                <div class="payment-ref">{payment.get('reference', 'N/A')}</div>
-                <div class="payment-row"><span class="payment-label">Bank</span><span class="payment-value">{payment.get('bank_name', 'N/A')}</span></div>
-                <div class="payment-row"><span class="payment-label">Account Number</span><span class="payment-value">{payment.get('account_number', 'N/A')}</span></div>
-                <div class="payment-row"><span class="payment-label">Account Name</span><span class="payment-value">{payment.get('account_holder', 'N/A')}</span></div>
-                <div class="payment-row"><span class="payment-label">Amount</span><span class="payment-value">RM {payment.get('amount', 0):.2f}</span></div>
-            </div>
-            """, unsafe_allow_html=True)
+        # Only show payment info and receipt upload for pending bookings
+        if status == "pending_payment":
+            # Payment info
+            if payment:
+                st.markdown(f"""
+                <div class="payment-card">
+                    <div class="payment-header">💳 Payment Instructions</div>
+                    <div class="payment-ref">{payment.get('reference', 'N/A')}</div>
+                    <div class="payment-row"><span class="payment-label">Bank</span><span class="payment-value">{payment.get('bank_name', 'N/A')}</span></div>
+                    <div class="payment-row"><span class="payment-label">Account Number</span><span class="payment-value">{payment.get('account_number', 'N/A')}</span></div>
+                    <div class="payment-row"><span class="payment-label">Account Name</span><span class="payment-value">{payment.get('account_holder', 'N/A')}</span></div>
+                    <div class="payment-row"><span class="payment-label">Amount</span><span class="payment-value">RM {payment.get('amount', 0):.2f}</span></div>
+                </div>
+                """, unsafe_allow_html=True)
 
-            st.warning(f"⏰ **Payment Deadline:** {booking.get('payment_deadline', 'N/A')}")
-            st.info("📤 After transfer, upload your receipt below for verification.")
+                st.warning(f"⏰ **Payment Deadline:** {booking.get('payment_deadline', 'N/A')}")
+                st.info("📤 After transfer, upload your receipt below for verification.")
 
-        # Receipt upload
-        st.markdown("---")
-        st.markdown("**Upload Payment Receipt**")
-        uploaded_file = st.file_uploader(
-            "Upload receipt image",
-            type=["jpg", "jpeg", "png", "webp"],
-            key=f"receipt_{booking.get('booking_id')}",
-            label_visibility="collapsed"
-        )
+            # Receipt upload
+            st.markdown("---")
+            st.markdown("**Upload Payment Receipt**")
+            uploaded_file = st.file_uploader(
+                "Upload receipt image",
+                type=["jpg", "jpeg", "png", "webp"],
+                key=f"receipt_{msg_index}_{booking.get('booking_id')}",
+                label_visibility="collapsed"
+            )
 
-        if uploaded_file:
-            if st.button("✅ Verify Payment", type="primary", key=f"verify_{booking.get('booking_id')}"):
-                with st.spinner("Verifying receipt..."):
+            if uploaded_file:
+                if st.button("✅ Verify Payment", type="primary", key=f"verify_{msg_index}_{booking.get('booking_id')}"):
+                    # Show modern processing indicator
+                    verify_placeholder = st.empty()
+                    with verify_placeholder.container():
+                        st.markdown("""
+                        <div class="thinking-bubble" style="margin: 10px 0;">
+                            <div class="thinking-dots">
+                                <div class="thinking-dot"></div>
+                                <div class="thinking-dot"></div>
+                                <div class="thinking-dot"></div>
+                            </div>
+                            <span class="thinking-text">📸 Verifying receipt...</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+
                     result = upload_receipt(booking.get('booking_id'), uploaded_file)
+                    verify_placeholder.empty()
+
                     if result:
                         if result.get("status") == "verified":
                             st.success(f"✅ {result.get('message')}")
@@ -398,22 +729,93 @@ def render_messages():
     messages = st.session_state.messages
     for i, msg in enumerate(messages):
         is_latest = i == len(messages) - 1
-        render_message(msg, is_latest)
+        render_message(msg, is_latest, msg_index=i)
 
 
-def call_fastapi(message):
-    """Call chat API."""
+def render_thinking_indicator(text="Thinking", show_icon=True):
+    """Render modern LLM-style thinking indicator.
+
+    Args:
+        text: The text to display (e.g., "Thinking", "Searching", "Processing")
+        show_icon: Whether to show a contextual icon
+    """
+    # Choose icon based on text
+    icon = ""
+    if show_icon:
+        icon_map = {
+            "Thinking": "💭",
+            "Searching": "🔍",
+            "Processing": "⚙️",
+            "Booking": "🎫",
+            "Checking": "📋",
+        }
+        icon = icon_map.get(text, "💭")
+
+    thinking_html = f"""
+    <div class="thinking-container">
+        <div class="avatar agent">🚌</div>
+        <div>
+            <div class="agent-name">BusGo Agent</div>
+            <div class="thinking-bubble">
+                <div class="thinking-dots">
+                    <div class="thinking-dot"></div>
+                    <div class="thinking-dot"></div>
+                    <div class="thinking-dot"></div>
+                </div>
+                <span class="thinking-text">{icon} {text}...</span>
+            </div>
+        </div>
+    </div>
+    """
+    return st.markdown(thinking_html, unsafe_allow_html=True)
+
+
+def call_fastapi_stream(message, placeholder):
+    """Call streaming chat API, progressively updating the placeholder."""
     try:
         resp = requests.post(
-            f"{FASTAPI_URL}/chat",
-            json={"message": message, "session_id": st.session_state.session_id},
-            timeout=60
+            f"{FASTAPI_URL}/chat/stream",
+            json={
+                "message": message,
+                "session_id": st.session_state.session_id,
+                "passenger_id": st.session_state.passenger_id,
+            },
+            stream=True,
+            timeout=120
         )
         resp.raise_for_status()
-        result = resp.json()
-        st.session_state.session_id = result.get("session_id")
-        return result
-    except Exception as e:
+
+        full_text = ""
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
+            payload = line[6:]  # strip "data: " prefix
+
+            if payload == "[DONE]":
+                break
+
+            try:
+                event = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+
+            if event.get("type") == "meta":
+                st.session_state.session_id = event.get("session_id")
+            elif event.get("type") == "token":
+                full_text += event.get("text", "")
+                # Update placeholder with growing agent message
+                placeholder.markdown(
+                    f'<div class="message-row">'
+                    f'<div class="avatar agent">\U0001f68c</div>'
+                    f'<div>'
+                    f'<div class="agent-name">BusGo Agent</div>'
+                    f'<div class="message-content agent">{full_text}</div>'
+                    f'</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+        return full_text if full_text else None
+    except Exception:
         return None
 
 
@@ -426,7 +828,7 @@ def search_direct(origin, destination, travel_date):
         resp = requests.get(f"{FASTAPI_URL}/schedules", params=params, timeout=10)
         resp.raise_for_status()
         return resp.json()
-    except:
+    except Exception:
         return []
 
 
@@ -453,7 +855,7 @@ def check_direct(booking_id):
             return None
         resp.raise_for_status()
         return resp.json()
-    except:
+    except Exception:
         return None
 
 
@@ -462,7 +864,7 @@ def cancel_direct(booking_id):
     try:
         resp = requests.delete(f"{FASTAPI_URL}/bookings/{booking_id}", timeout=10)
         return resp.status_code == 200
-    except:
+    except Exception:
         return False
 
 
@@ -481,6 +883,23 @@ def upload_receipt(booking_id, file):
         return None
 
 
+@st.cache_data
+def cached_seat_map(total_seats: int, seats_per_row: int, layout: str,
+                    occupied_seats: tuple, selected_seats: tuple) -> bytes:
+    """Cached seat map generation. Args must be hashable (tuples, not lists)."""
+    config = SeatMapConfig(
+        total_seats=total_seats,
+        seats_per_row=seats_per_row,
+        layout=layout,
+    )
+    buf = generate_seat_map_bytes(
+        occupied_seats=list(occupied_seats),
+        selected_seats=list(selected_seats),
+        config=config,
+    )
+    return buf.getvalue()
+
+
 def get_seat_info(schedule_id):
     """Get seat availability for a schedule."""
     try:
@@ -492,7 +911,7 @@ def get_seat_info(schedule_id):
 
 
 def book_with_seat(schedule_id, name, phone, seat_number, num_passengers=1):
-    """Create booking with specific seat selection."""
+    """Create booking with specific seat selection. Returns (result_dict, None) on success or (None, error_message) on failure."""
     try:
         resp = requests.post(f"{FASTAPI_URL}/bookings", json={
             "schedule_id": schedule_id,
@@ -501,33 +920,63 @@ def book_with_seat(schedule_id, name, phone, seat_number, num_passengers=1):
             "num_passengers": num_passengers,
             "seat_number": seat_number,
         }, timeout=10)
+        if resp.status_code == 400:
+            detail = resp.json().get("detail", "Booking failed.")
+            return None, detail
         resp.raise_for_status()
-        return resp.json()
+        return resp.json(), None
     except Exception as e:
-        return None
+        return None, "Connection error. Please try again."
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### 🚌 BusGo Agent")
-    st.markdown("---")
+    # Brand header
+    st.markdown("""
+    <div class="sidebar-brand">
+        <h3>🚌 BusGo Agent</h3>
+        <p>Your Travel Assistant</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown("**Commands**")
+    # User info card
+    st.markdown(f"""
+    <div class="user-card">
+        <div class="user-card-name">👤 {st.session_state.passenger_name}</div>
+        <div class="user-card-phone">📞 {st.session_state.passenger_phone}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Commands section
+    st.markdown('<div class="sidebar-section">Quick Commands</div>', unsafe_allow_html=True)
     search_click = st.button("🔍 Search Buses", use_container_width=True)
     book_click = st.button("🎫 Book Ticket", use_container_width=True)
-    check_click = st.button("📋 Check Booking", use_container_width=True)
+    my_bookings_click = st.button("📋 My Bookings", use_container_width=True)
+    check_click = st.button("🔎 Check Booking", use_container_width=True)
     cancel_click = st.button("❌ Cancel Booking", use_container_width=True)
 
     st.markdown("---")
 
-    if st.button("🔄 New Chat", use_container_width=True):
-        for k in ["messages", "session_id", "mode", "last_schedules", "welcomed", "selected_schedule", "seat_info", "book_schedules"]:
-            st.session_state[k] = [] if k in ["messages", "last_schedules", "book_schedules"] else None
-        st.session_state.welcomed = False
+    # Session section
+    st.markdown('<div class="sidebar-section">Session</div>', unsafe_allow_html=True)
+    with st.container():
+        st.markdown('<div class="new-chat-btn">', unsafe_allow_html=True)
+        if st.button("🔄 New Chat", use_container_width=True):
+            for k in ["messages", "session_id", "mode", "last_schedules", "welcomed", "selected_schedule", "seat_info", "book_schedules"]:
+                st.session_state[k] = [] if k in ["messages", "last_schedules", "book_schedules"] else None
+            st.session_state.welcomed = False
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if st.button("🚪 Logout", use_container_width=True):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.rerun()
 
     st.markdown("---")
-    st.markdown("**Language**")
+
+    # Language selector
+    st.markdown('<div class="sidebar-section">Language</div>', unsafe_allow_html=True)
     lang = st.radio("", ["EN", "BM"], horizontal=True,
                     index=0 if st.session_state.lang == "EN" else 1,
                     label_visibility="collapsed")
@@ -535,10 +984,19 @@ with st.sidebar:
         st.session_state.lang = lang
         st.rerun()
 
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align:center; padding: 0.5rem 0;">
+        <span style="font-size:0.65rem; color:rgba(99,102,241,0.5); letter-spacing:0.05em;">v1.0 • 2026</span>
+    </div>
+    """, unsafe_allow_html=True)
+
 
 # Handle command clicks
 if search_click: st.session_state.mode = "search"
 if book_click: st.session_state.mode = "book_select"
+if my_bookings_click: st.session_state.mode = "my_bookings"
 if check_click: st.session_state.mode = "check"
 if cancel_click: st.session_state.mode = "cancel"
 
@@ -547,7 +1005,12 @@ if cancel_click: st.session_state.mode = "cancel"
 
 # Welcome message
 if not st.session_state.welcomed:
-    add_msg("assistant", t("welcome"))
+    first_name = st.session_state.passenger_name.split()[0] if st.session_state.passenger_name else ""
+    if st.session_state.is_new_user:
+        welcome_text = t("welcome")
+    else:
+        welcome_text = f"Welcome back, **{first_name}**! 👋 How can I help you today? You can search for buses, check your bookings, or just ask me anything!"
+    add_msg("assistant", welcome_text)
     st.session_state.welcomed = True
 
 # Render messages
@@ -682,17 +1145,13 @@ elif mode == "seat_select":
 
             st.markdown("---")
 
-            # Generate and display seat map
-            config = SeatMapConfig(
+            # Generate and display seat map (cached)
+            seat_map_bytes = cached_seat_map(
                 total_seats=seat_info["total_seats"],
                 seats_per_row=seat_info["seats_per_row"],
                 layout=seat_info["seat_layout"],
-            )
-
-            seat_map_bytes = generate_seat_map_bytes(
-                occupied_seats=seat_info["occupied_seats"],
-                selected_seats=[],
-                config=config,
+                occupied_seats=tuple(seat_info["occupied_seats"]),
+                selected_seats=(),
             )
 
             col1, col2 = st.columns([1, 1])
@@ -729,8 +1188,8 @@ elif mode == "seat_select":
                     st.markdown("---")
                     st.markdown("**Passenger Details**")
 
-                    name = st.text_input("Full Name *", placeholder="Ahmad bin Ali", key="seat_name")
-                    phone = st.text_input("Phone *", placeholder="0123456789", key="seat_phone")
+                    name = st.text_input("Full Name *", value=st.session_state.passenger_name, placeholder="Ahmad bin Ali", key="seat_name")
+                    phone = st.text_input("Phone *", value=st.session_state.passenger_phone, placeholder="0123456789", key="seat_phone")
 
                     st.markdown("---")
 
@@ -783,48 +1242,19 @@ elif mode == "booking_confirm":
             st.markdown("---")
 
             # Booking Summary Card
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 2px solid #22c55e; border-radius: 12px; padding: 20px; margin: 10px 0;">
-                <div style="font-size: 18px; font-weight: 700; color: #166534; margin-bottom: 15px;">📋 Booking Summary</div>
-
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                    <div>
-                        <div style="font-size: 12px; color: #6b7280;">Route</div>
-                        <div style="font-size: 16px; font-weight: 600; color: #111827;">{schedule['origin']} → {schedule['destination']}</div>
-                    </div>
-                    <div>
-                        <div style="font-size: 12px; color: #6b7280;">Departure</div>
-                        <div style="font-size: 16px; font-weight: 600; color: #111827;">{schedule['departure_time']}</div>
-                    </div>
-                    <div>
-                        <div style="font-size: 12px; color: #6b7280;">Seat Number</div>
-                        <div style="font-size: 16px; font-weight: 600; color: #111827;">Seat {pending['seat_number']}</div>
-                    </div>
-                    <div>
-                        <div style="font-size: 12px; color: #6b7280;">Bus Type</div>
-                        <div style="font-size: 16px; font-weight: 600; color: #111827;">{schedule['bus_type']}</div>
-                    </div>
-                </div>
-
-                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px dashed #22c55e;">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                        <div>
-                            <div style="font-size: 12px; color: #6b7280;">Passenger Name</div>
-                            <div style="font-size: 16px; font-weight: 600; color: #111827;">{pending['passenger_name']}</div>
-                        </div>
-                        <div>
-                            <div style="font-size: 12px; color: #6b7280;">Phone</div>
-                            <div style="font-size: 16px; font-weight: 600; color: #111827;">{pending['passenger_phone']}</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px dashed #22c55e; text-align: center;">
-                    <div style="font-size: 14px; color: #6b7280;">Total Amount</div>
-                    <div style="font-size: 28px; font-weight: 800; color: #166534;">RM {schedule['price']:.2f}</div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            bus_type = schedule.get('bus_type') or 'Standard'
+            st.success("**Booking Summary**")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f"**Route:** {schedule['origin']} → {schedule['destination']}")
+                st.markdown(f"**Seat Number:** Seat {pending['seat_number']}")
+                st.markdown(f"**Passenger:** {pending['passenger_name']}")
+            with c2:
+                st.markdown(f"**Departure:** {schedule['departure_time']}")
+                st.markdown(f"**Bus Type:** {bus_type}")
+                st.markdown(f"**Phone:** {pending['passenger_phone']}")
+            st.markdown("---")
+            st.metric("Total Amount", f"RM {schedule['price']:.2f}")
 
             st.warning("⚠️ **Please verify all details are correct.** Once confirmed, you will have 10 minutes to complete payment.")
 
@@ -836,7 +1266,7 @@ elif mode == "booking_confirm":
                     add_msg("user", f"Confirm booking: Seat {pending['seat_number']} on {schedule['origin']} → {schedule['destination']} for {pending['passenger_name']}")
 
                     # Execute the actual booking
-                    result = book_with_seat(
+                    result, error = book_with_seat(
                         pending["schedule_id"],
                         pending["passenger_name"],
                         pending["passenger_phone"],
@@ -846,7 +1276,7 @@ elif mode == "booking_confirm":
                     if result:
                         add_msg("assistant", f"✅ Booking confirmed! Seat **{pending['seat_number']}** reserved. Please complete payment within the deadline.", {"booking": result})
                     else:
-                        add_msg("assistant", "❌ Booking failed. The seat may have been taken by another user. Please try again.")
+                        add_msg("assistant", f"❌ Booking failed: {error}")
 
                     # Clear all booking flow state
                     st.session_state.pending_booking = None
@@ -871,9 +1301,48 @@ elif mode == "booking_confirm":
                     st.session_state.mode = None
                     st.rerun()
 
+elif mode == "my_bookings":
+    with st.container(border=True):
+        st.markdown("#### 📋 My Bookings")
+        try:
+            resp = requests.get(
+                f"{FASTAPI_URL}/passengers/{st.session_state.passenger_id}/bookings",
+                timeout=10,
+            )
+            resp.raise_for_status()
+            bookings = resp.json()
+        except Exception:
+            bookings = []
+
+        if not bookings:
+            st.info("You don't have any bookings yet. Use **Book Ticket** to get started!")
+        else:
+            for b in bookings:
+                status = b.get("status", "unknown")
+                status_map = {
+                    "confirmed": ("✅ Confirmed", "#22c55e"),
+                    "pending_payment": ("⏳ Pending Payment", "#f59e0b"),
+                    "cancelled": ("❌ Cancelled", "#ef4444"),
+                }
+                status_display, status_color = status_map.get(status, (status.replace("_", " ").title(), "#6b7280"))
+                st.markdown(f"""
+                <div class="receipt-card">
+                    <div class="receipt-id">#{b.get('booking_id')}</div>
+                    <div class="receipt-row"><span class="receipt-label">Route</span><span class="receipt-value">{b.get('origin')} → {b.get('destination')}</span></div>
+                    <div class="receipt-row"><span class="receipt-label">Departure</span><span class="receipt-value">{b.get('departure_time')}</span></div>
+                    <div class="receipt-row"><span class="receipt-label">Seat</span><span class="receipt-value">{b.get('seat_number')}</span></div>
+                    <div class="receipt-row"><span class="receipt-label">Price</span><span class="receipt-value">RM {b.get('total_price', 0):.2f}</span></div>
+                    <div class="receipt-row"><span class="receipt-label">Status</span><span class="receipt-value" style="color:{status_color}">{status_display}</span></div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        if st.button("← Back to chat", use_container_width=True):
+            st.session_state.mode = None
+            st.rerun()
+
 elif mode == "check":
     with st.container(border=True):
-        st.markdown("#### 📋 Check Booking")
+        st.markdown("#### 🔎 Check Booking")
         booking_id = st.number_input("Booking ID", min_value=1, step=1)
         c1, c2 = st.columns(2)
         with c1:
@@ -915,10 +1384,22 @@ elif mode == "cancel":
 st.markdown("---")
 if user_input := st.chat_input("Ask me anything..."):
     add_msg("user", user_input)
-    with st.spinner(t("thinking")):
-        result = call_fastapi(user_input)
-        if result:
-            add_msg("assistant", result.get("reply", ""))
-        else:
-            add_msg("assistant", t("error"))
+
+    # Render the user message immediately
+    render_message({"role": "user", "content": user_input})
+
+    # Create placeholder for streaming response
+    response_placeholder = st.empty()
+
+    # Show thinking indicator initially
+    with response_placeholder.container():
+        render_thinking_indicator()
+
+    # Stream response — placeholder updates progressively with tokens
+    full_text = call_fastapi_stream(user_input, response_placeholder)
+
+    if full_text:
+        add_msg("assistant", full_text)
+    else:
+        add_msg("assistant", t("error"))
     st.rerun()

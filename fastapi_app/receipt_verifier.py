@@ -79,7 +79,7 @@ def verify_receipt(
 
     # Extract values
     amount_found = extracted_data.get("amount_found")
-    recipient = extracted_data.get("recipient")
+    recipient_account = extracted_data.get("recipient_account")
     reference_found = extracted_data.get("reference_found")
     transaction_time_str = extracted_data.get("transaction_time")
 
@@ -89,7 +89,7 @@ def verify_receipt(
         "expected_amount": booking.total_price,
         "expected_reference": booking.payment_reference,
         "booking_time": booking.booked_at.strftime("%Y-%m-%d %H:%M") if booking.booked_at else None,
-        "extracted_recipient": recipient,
+        "extracted_recipient": recipient_account,
         "extracted_amount": amount_found,
         "extracted_reference": reference_found,
         "extracted_time": transaction_time_str,
@@ -97,9 +97,9 @@ def verify_receipt(
 
     # 1. Verify recipient name
     recipient_match = False
-    if recipient and bank_account.account_holder:
+    if recipient_account and bank_account.account_holder:
         # Case-insensitive comparison, allow partial match
-        recipient_lower = recipient.lower().strip()
+        recipient_lower = recipient_account.lower().strip()
         expected_lower = bank_account.account_holder.lower().strip()
         recipient_match = (
             recipient_lower == expected_lower or
@@ -107,7 +107,7 @@ def verify_receipt(
             recipient_lower in expected_lower
         )
     if not recipient_match:
-        reasons.append(f"Recipient mismatch: expected '{bank_account.account_holder}', found '{recipient}'")
+        reasons.append(f"Recipient mismatch: expected '{bank_account.account_holder}', found '{recipient_account}'")
 
     # 2. Verify amount
     amount_match = False

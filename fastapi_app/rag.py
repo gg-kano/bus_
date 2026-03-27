@@ -2,23 +2,26 @@
 FAQ RAG (Retrieval Augmented Generation) system with embedding database.
 
 Uses:
-- Ollama for embeddings
+- Ollama with bge-m3 for embeddings (open-source, multilingual)
 - ChromaDB for vector storage
 """
 
 import json
 import os
+import logging
 import httpx
 from typing import List, Dict, Optional
 
 import chromadb
+
+logger = logging.getLogger(__name__)
 from chromadb.config import Settings
 
 # Config
 FAQ_DIR = os.path.join(os.path.dirname(__file__), "faq")
 CHROMA_PATH = os.getenv("CHROMA_PATH", "/tmp/chroma_faq")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "bge-m3")
 
 # Collection name
 FAQ_COLLECTION = "faq"
@@ -43,7 +46,7 @@ def load_faq() -> List[Dict]:
 
     try:
         if not os.path.exists(FAQ_DIR):
-            print(f"[RAG] FAQ directory not found: {FAQ_DIR}")
+            logger.warning(f"[RAG] FAQ directory not found: {FAQ_DIR}")
             return []
 
         # Walk through all subdirectories
@@ -68,20 +71,20 @@ def load_faq() -> List[Dict]:
                         faq_list.append(faq_data)
                         faq_id += 1
                 except Exception as e:
-                    print(f"[RAG] Failed to load {filepath}: {e}")
+                    logger.error(f"[RAG] Failed to load {filepath}: {e}")
 
-        print(f"[RAG] Loaded {len(faq_list)} FAQs from {FAQ_DIR}")
+        logger.info(f"[RAG] Loaded {len(faq_list)} FAQs from {FAQ_DIR}")
         return faq_list
 
     except Exception as e:
-        print(f"[RAG] Failed to load FAQ: {e}")
+        logger.error(f"[RAG] Failed to load FAQ: {e}")
         return []
 
 
 def get_embedding(text: str) -> Optional[List[float]]:
-    """Get embedding from Ollama."""
+    """Get embedding from Ollama (using bge-m3)."""
     try:
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=60.0) as client:
             resp = client.post(
                 f"{OLLAMA_URL}/api/embeddings",
                 json={
@@ -92,7 +95,7 @@ def get_embedding(text: str) -> Optional[List[float]]:
             resp.raise_for_status()
             return resp.json().get("embedding")
     except Exception as e:
-        print(f"[RAG] Embedding error: {e}")
+        logger.error(f"[RAG] Embedding error: {e}")
         return None
 
 
@@ -120,17 +123,17 @@ class FAQVectorStore:
 
         # Check if already populated
         if self.collection.count() > 0:
-            print(f"[RAG] FAQ collection already exists with {self.collection.count()} entries")
+            logger.info(f"[RAG] FAQ collection already exists with {self.collection.count()} entries")
             self._initialized = True
             return
 
         # Load and embed FAQ
         faq_data = load_faq()
         if not faq_data:
-            print("[RAG] No FAQ data to load")
+            logger.warning("[RAG] No FAQ data to load")
             return
 
-        print(f"[RAG] Embedding {len(faq_data)} FAQ entries...")
+        logger.info(f"[RAG] Embedding {len(faq_data)} FAQ entries...")
 
         ids = []
         embeddings = []
@@ -160,7 +163,7 @@ class FAQVectorStore:
                 documents=documents,
                 metadatas=metadatas
             )
-            print(f"[RAG] Successfully added {len(embeddings)} FAQ entries to vector store")
+            logger.info(f"[RAG] Successfully added {len(embeddings)} FAQ entries to vector store")
 
         self._initialized = True
 
@@ -175,7 +178,7 @@ class FAQVectorStore:
         # Get query embedding
         query_embedding = get_embedding(query)
         if not query_embedding:
-            print("[RAG] Failed to get query embedding")
+            logger.warning("[RAG] Failed to get query embedding")
             return []
 
         # Search
@@ -204,9 +207,9 @@ class FAQVectorStore:
                     })
 
         if faq_results:
-            print(f"[RAG] Query: '{query[:50]}...' -> Found {len(faq_results)} relevant FAQ(s)")
+            logger.info(f"[RAG] Query: '{query[:50]}...' -> Found {len(faq_results)} relevant FAQ(s)")
             for r in faq_results:
-                print(f"[RAG]   - {r['question'][:40]}... (similarity: {r['similarity']:.2f})")
+                logger.debug(f"[RAG]   - {r['question'][:40]}... (similarity: {r['similarity']:.2f})")
 
         return faq_results
 
@@ -241,10 +244,10 @@ def format_faq_context(faq_results: List[Dict]) -> str:
     if not faq_results:
         return ""
 
-    lines = ["RELEVANT FAQ:"]
+    lines = ["FAQ INFO (use these answers for policy questions):"]
     for i, faq in enumerate(faq_results, 1):
-        lines.append(f"Q{i}: {faq['question']}")
-        lines.append(f"A{i}: {faq['answer']}")
+        lines.append(f"Q: {faq['question']}")
+        lines.append(f"A: {faq['answer']}")
         lines.append("")
 
     return "\n".join(lines)

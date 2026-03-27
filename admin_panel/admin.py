@@ -1,10 +1,14 @@
 import streamlit as st
 import pandas as pd
+import altair as alt
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from database import SessionLocal, init_db, Bus, Route, Schedule, Passenger, Booking, BankAccount
+from database import (
+    SessionLocal, init_db, Bus, Route, Schedule, Passenger, Booking, BankAccount,
+    get_dashboard_metrics, get_booking_trends, get_revenue_by_route, get_schedule_alerts
+)
 
 # Add parent path for utils import (mounted at /utils in Docker, or parent dir for local dev)
 sys.path.insert(0, "/")  # Docker: /utils folder
@@ -27,67 +31,116 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Sidebar - Deep Ocean Navy */
+    /* ═══ Sidebar - Deep Ocean with Glassmorphism ═══ */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0A1A3C 0%, #143A75 100%);
+        background: linear-gradient(180deg, #061428 0%, #0A1A3C 25%, #143A75 65%, #0E2D5E 100%) !important;
+        border-right: 1px solid rgba(138, 217, 242, 0.1);
+        box-shadow: 4px 0 30px rgba(0, 0, 0, 0.25);
+    }
+    [data-testid="stSidebar"] > div:first-child {
+        background: transparent;
+        padding-top: 1.5rem;
     }
     [data-testid="stSidebar"] * {
         color: #E6FBFF !important;
     }
 
-    /* Sidebar header */
+    /* Sidebar scrollbar */
+    [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar {
+        width: 4px;
+    }
+    [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar-thumb {
+        background: rgba(138, 217, 242, 0.2);
+        border-radius: 10px;
+    }
+    [data-testid="stSidebar"] > div:first-child {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(138, 217, 242, 0.2) transparent;
+    }
+
+    /* Sidebar header with glass accent */
     .sidebar-header {
-        padding: 1.25rem 0;
+        padding: 0.75rem 1rem;
         margin-bottom: 1.5rem;
-        border-bottom: 1px solid rgba(138, 217, 242, 0.2);
+        border-bottom: 1px solid rgba(138, 217, 242, 0.12);
+        background: rgba(138, 217, 242, 0.04);
+        border-radius: 12px;
     }
     .sidebar-header h1 {
         font-size: 1.4rem;
-        font-weight: 700;
+        font-weight: 800;
         margin: 0;
-        color: #fff !important;
+        background: linear-gradient(135deg, #ffffff 0%, #8AD9F2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
         letter-spacing: -0.02em;
     }
     .sidebar-header p {
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         color: #8AD9F2 !important;
         margin: 0.35rem 0 0 0;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
+        font-weight: 500;
     }
 
     /* Section labels - Ocean Teal accent */
     .nav-section {
-        font-size: 0.65rem;
+        font-size: 0.6rem;
         text-transform: uppercase;
         letter-spacing: 0.15em;
         color: #8AD9F2 !important;
-        padding: 1.25rem 0 0.5rem 0;
-        margin-top: 0.5rem;
-        font-weight: 600;
+        padding: 1rem 0 0.4rem 0.25rem;
+        margin-top: 0.25rem;
+        font-weight: 700;
     }
 
-    /* Navigation buttons styling */
+    /* Navigation buttons */
     [data-testid="stSidebar"] button {
-        background: transparent !important;
-        border: none !important;
+        background: rgba(0, 158, 194, 0.05) !important;
+        border: 1px solid rgba(138, 217, 242, 0.1) !important;
         border-radius: 10px !important;
-        transition: all 0.25s ease !important;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
         margin: 2px 0 !important;
     }
     [data-testid="stSidebar"] button:hover {
         background: rgba(0, 158, 194, 0.15) !important;
-        transform: translateX(4px);
+        border-color: rgba(138, 217, 242, 0.3) !important;
+        box-shadow: 0 0 20px rgba(0, 158, 194, 0.1);
+        transform: translateX(3px);
     }
     [data-testid="stSidebar"] button[kind="primary"] {
         background: linear-gradient(135deg, #009EC2 0%, #006F87 100%) !important;
-        box-shadow: 0 4px 15px rgba(0, 158, 194, 0.3) !important;
+        border: 1px solid rgba(138, 217, 242, 0.3) !important;
+        box-shadow: 0 4px 20px rgba(0, 158, 194, 0.3) !important;
+    }
+    [data-testid="stSidebar"] button[kind="primary"]:hover {
+        box-shadow: 0 6px 25px rgba(0, 158, 194, 0.4) !important;
+        transform: translateX(3px);
     }
     [data-testid="stSidebar"] button[kind="secondary"] {
         border-left: 3px solid transparent !important;
     }
     [data-testid="stSidebar"] button[kind="secondary"]:hover {
         border-left: 3px solid #8AD9F2 !important;
+    }
+
+    /* Sidebar collapse/expand button */
+    [data-testid="stSidebar"] button[kind="header"] {
+        color: #8AD9F2 !important;
+        transition: color 0.2s ease, transform 0.2s ease;
+        border: none !important;
+        background: transparent !important;
+    }
+    [data-testid="stSidebar"] button[kind="header"]:hover {
+        color: #ffffff !important;
+        transform: scale(1.1);
+        box-shadow: none !important;
+        background: transparent !important;
     }
 
     /* Main content area - Soft cloud white */
@@ -109,41 +162,95 @@ st.markdown("""
         letter-spacing: -0.02em;
     }
 
-    /* Metric cards - Ocean gradient */
-    [data-testid="stMetric"] {
-        background: linear-gradient(135deg, #006F87 0%, #009EC2 100%);
+    /* Custom colored metric cards */
+    .metric-card {
         padding: 1.25rem;
         border-radius: 16px;
-        box-shadow: 0 8px 24px rgba(0, 111, 135, 0.2);
-        border: 1px solid rgba(138, 217, 242, 0.2);
+        text-align: center;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
     }
-    [data-testid="stMetric"] label {
-        color: #E6FBFF !important;
+    .metric-card .metric-value {
+        font-size: 2rem;
+        font-weight: 800;
+        color: white;
+        margin-bottom: 0.25rem;
+    }
+    .metric-card .metric-label {
         font-size: 0.8rem;
         text-transform: uppercase;
         letter-spacing: 0.05em;
+        color: rgba(255, 255, 255, 0.9);
     }
-    [data-testid="stMetric"] [data-testid="stMetricValue"] {
-        color: #fff !important;
-        font-weight: 800;
-        font-size: 2rem;
+    .metric-card .metric-delta {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+        color: rgba(255, 255, 255, 0.8);
+    }
+    /* Blue - Fleet/Assets */
+    .metric-blue { background: linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%); }
+    /* Purple - Analytics/Routes */
+    .metric-purple { background: linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%); }
+    /* Orange - Time/Schedule */
+    .metric-orange { background: linear-gradient(135deg, #F97316 0%, #EA580C 100%); }
+    /* Green - Performance */
+    .metric-green { background: linear-gradient(135deg, #10B981 0%, #059669 100%); }
+    /* Emerald - Revenue/Money */
+    .metric-emerald { background: linear-gradient(135deg, #34D399 0%, #10B981 100%); }
+    /* Rose - Warnings */
+    .metric-rose { background: linear-gradient(135deg, #F43F5E 0%, #BE123C 100%); }
+    /* Slate - Neutral/Total */
+    .metric-slate { background: linear-gradient(135deg, #475569 0%, #334155 100%); }
+    /* Teal - Info */
+    .metric-teal { background: linear-gradient(135deg, #14B8A6 0%, #0D9488 100%); }
+
+    /* Hide default st.metric styling when using custom cards */
+    [data-testid="stMetric"] {
+        background: transparent;
+        padding: 0;
+        box-shadow: none;
+        border: none;
     }
 
-    /* Tabs styling */
+    /* Tabs styling - Modern card-style tabs */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background: #E6FBFF;
-        padding: 0.5rem;
-        border-radius: 12px;
+        gap: 16px;
+        background: transparent;
+        padding: 0;
+        border-radius: 0;
+        border-bottom: 2px solid #E6FBFF;
+        padding-bottom: 0;
     }
     .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        color: #143A75;
-        font-weight: 500;
+        border-radius: 12px 12px 0 0;
+        color: #0A1A3C;
+        font-weight: 600;
+        font-size: 0.95rem;
+        padding: 1rem 2rem !important;
+        margin-bottom: -2px;
+        background: #ffffff;
+        border: 2px solid #E6FBFF;
+        border-bottom: none;
+        transition: all 0.3s ease;
+        min-width: 160px;
+        text-align: center;
+        box-shadow: 0 2px 8px rgba(0, 111, 135, 0.08);
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        background: #f0fbff;
+        transform: translateY(-2px);
+        color: #006F87;
+        border-color: #8AD9F2;
     }
     .stTabs [aria-selected="true"] {
         background: linear-gradient(135deg, #009EC2 0%, #006F87 100%) !important;
         color: white !important;
+        border: 2px solid #006F87 !important;
+        border-bottom: 2px solid white !important;
+        box-shadow: 0 -4px 20px rgba(0, 158, 194, 0.3);
+        transform: translateY(-3px);
+    }
+    .stTabs [data-baseweb="tab-panel"] {
+        padding-top: 1.5rem;
     }
 
     /* Buttons */
@@ -174,15 +281,65 @@ st.markdown("""
         border-radius: 12px;
     }
 
-    /* Footer in sidebar */
-    [data-testid="stSidebar"] hr {
-        border-color: rgba(138, 217, 242, 0.2) !important;
-        margin: 1.5rem 0 1rem 0;
+    /* Dashboard section headers */
+    .dashboard-section {
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
     }
+
+    /* Status cards for booking breakdown */
+    .status-card {
+        padding: 1rem;
+        border-radius: 12px;
+        text-align: center;
+    }
+    .status-card-confirmed {
+        background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+        color: white;
+    }
+    .status-card-pending {
+        background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
+        color: white;
+    }
+    .status-card-cancelled {
+        background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%);
+        color: white;
+    }
+
+    /* Alert card styles */
+    .alert-item {
+        padding: 0.75rem 1rem;
+        border-radius: 8px;
+        margin-bottom: 0.5rem;
+        font-size: 0.9rem;
+    }
+    .alert-warning {
+        background: #FEF3C7;
+        border-left: 4px solid #F59E0B;
+        color: #92400E;
+    }
+    .alert-info {
+        background: #E0F2FE;
+        border-left: 4px solid #0EA5E9;
+        color: #0C4A6E;
+    }
+    .alert-success {
+        background: #D1FAE5;
+        border-left: 4px solid #10B981;
+        color: #065F46;
+    }
+
+    /* Sidebar dividers */
+    [data-testid="stSidebar"] hr {
+        border-color: rgba(138, 217, 242, 0.1) !important;
+        margin: 1rem 0;
+    }
+    /* Sidebar footer */
     [data-testid="stSidebar"] .stCaption {
-        color: rgba(138, 217, 242, 0.6) !important;
-        font-size: 0.7rem;
-        letter-spacing: 0.05em;
+        color: rgba(138, 217, 242, 0.45) !important;
+        font-size: 0.65rem;
+        letter-spacing: 0.06em;
+        text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -205,9 +362,25 @@ def get_db() -> Session:
     return SessionLocal()
 
 
+# ─── Custom Metric Card Helper ────────────────────────────────────────────────
+def metric_card(label: str, value: str, color: str = "blue", delta: str = None):
+    """
+    Render a colored metric card.
+    Colors: blue, purple, orange, green, emerald, rose, slate, teal
+    """
+    delta_html = f'<div class="metric-delta">{delta}</div>' if delta else ''
+    st.markdown(f"""
+    <div class="metric-card metric-{color}">
+        <div class="metric-value">{value}</div>
+        <div class="metric-label">{label}</div>
+        {delta_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+
 # ─── Sidebar Navigation ───────────────────────────────────────────────────────
 with st.sidebar:
-    # Header
+    # Header with glass accent
     st.markdown("""
     <div class="sidebar-header">
         <h1>🚌 BusTicket</h1>
@@ -218,7 +391,6 @@ with st.sidebar:
     # Overview section
     st.markdown('<div class="nav-section">Overview</div>', unsafe_allow_html=True)
 
-    # Navigation options with cleaner labels
     nav_options = {
         "Dashboard": "dashboard",
         "Bookings": "bookings"
@@ -278,7 +450,11 @@ with st.sidebar:
 
     # Footer
     st.markdown("---")
-    st.caption("v1.0 • 2026")
+    st.markdown("""
+    <div style="text-align:center; padding: 0.25rem 0;">
+        <span style="font-size:0.6rem; color:rgba(138, 217, 242, 0.4); letter-spacing:0.06em;">v1.0 • 2026</span>
+    </div>
+    """, unsafe_allow_html=True)
 
 # Get current page
 page = st.session_state.current_page
@@ -292,109 +468,259 @@ if page == "dashboard":
 
     now = datetime.now()
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.metric("Total Buses", db.query(Bus).count())
-    with col2:
-        st.metric("Total Routes", db.query(Route).count())
-    with col3:
-        upcoming_count = db.query(Schedule).filter(Schedule.departure_time >= now).count()
-        st.metric("Upcoming", upcoming_count)
-    with col4:
+    # Fetch all dashboard metrics
+    metrics = get_dashboard_metrics(db)
+    alerts = get_schedule_alerts(db)
+
+    # ─── Two Main Tabs ────────────────────────────────────────────────────────
+    tab_ops, tab_finance = st.tabs(["🚌 Bus Operations", "💰 Financial Overview"])
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 1: BUS OPERATIONS
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab_ops:
+        # ─── Operations Snapshot ──────────────────────────────────────────────
+        st.subheader("Operations Snapshot")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            metric_card("Total Buses", str(db.query(Bus).count()), "blue")
+        with col2:
+            metric_card("Total Routes", str(db.query(Route).count()), "purple")
+        with col3:
+            upcoming_count = db.query(Schedule).filter(Schedule.departure_time >= now).count()
+            metric_card("Upcoming Schedules", str(upcoming_count), "orange")
+        with col4:
+            metric_card("Avg Occupancy", f"{metrics['avg_occupancy']:.1f}%", "green")
+
+        st.divider()
+
+        # ─── Operational Alerts ───────────────────────────────────────────────
+        st.subheader("Operational Alerts")
+        alert_col1, alert_col2 = st.columns(2)
+
+        with alert_col1:
+            if alerts['departing_soon']:
+                st.markdown(f"""
+                <div class="alert-item alert-info">
+                    <strong>Departing Soon:</strong> {len(alerts['departing_soon'])} bus(es) in next 2 hours
+                </div>
+                """, unsafe_allow_html=True)
+                for s in alerts['departing_soon'][:3]:
+                    st.caption(f"  • {s.route.origin} → {s.route.destination} at {s.departure_time.strftime('%H:%M')}")
+            else:
+                st.info("No buses departing in the next 2 hours.")
+
+        with alert_col2:
+            if alerts['low_availability']:
+                st.markdown(f"""
+                <div class="alert-item alert-success">
+                    <strong>Nearly Full:</strong> {len(alerts['low_availability'])} schedule(s) < 20% seats left
+                </div>
+                """, unsafe_allow_html=True)
+                for s in alerts['low_availability'][:3]:
+                    st.caption(f"  • {s.route.origin} → {s.route.destination} ({s.available_seats} seats left)")
+            else:
+                st.info("No schedules are nearly full.")
+
+        if alerts['no_bookings'] and len(alerts['no_bookings']) <= 10:
+            st.markdown(f"""
+            <div class="alert-item alert-warning">
+                <strong>No Bookings Yet:</strong> {len(alerts['no_bookings'])} upcoming schedule(s) have no bookings
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.divider()
+
+        # ─── On the Way ───────────────────────────────────────────────────────
+        st.subheader("On the Way")
         ontheway_count = db.query(Schedule).filter(
             Schedule.departure_time < now,
             Schedule.arrival_time >= now
         ).count()
-        st.metric("🚌 On the Way", ontheway_count)
-    with col5:
-        st.metric("Total Bookings", db.query(Booking).count())
 
-    st.divider()
+        if ontheway_count > 0:
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                metric_card("Buses En Route", str(ontheway_count), "teal")
+            ontheway_schedules = (
+                db.query(Schedule)
+                .filter(
+                    Schedule.departure_time < now,
+                    Schedule.arrival_time >= now
+                )
+                .order_by(Schedule.arrival_time)
+                .limit(10)
+                .all()
+            )
+            rows = []
+            for s in ontheway_schedules:
+                # Calculate progress
+                total_duration = (s.arrival_time - s.departure_time).total_seconds()
+                elapsed = (now - s.departure_time).total_seconds()
+                progress = min(100, max(0, (elapsed / total_duration) * 100)) if total_duration > 0 else 0
 
-    # ─── Upcoming Schedules (departure_time >= now) ───────────────────────────
-    st.subheader("📅 Upcoming Schedules")
-    upcoming_schedules = (
-        db.query(Schedule)
-        .filter(Schedule.departure_time >= now)
-        .order_by(Schedule.departure_time)
-        .limit(10)
-        .all()
-    )
-    if upcoming_schedules:
-        rows = []
-        for s in upcoming_schedules:
-            rows.append({
-                "ID": s.id,
-                "Route": f"{s.route.origin} → {s.route.destination}",
-                "Bus": s.bus.plate_number,
-                "Departure": s.departure_time.strftime("%Y-%m-%d %H:%M"),
-                "Arrival": s.arrival_time.strftime("%Y-%m-%d %H:%M"),
-                "Price (RM)": f"{s.price:.2f}",
-                "Seats Left": s.available_seats,
-                "Status": s.status,
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-    else:
-        st.info("No upcoming schedules yet.")
+                rows.append({
+                    "Route": f"{s.route.origin} → {s.route.destination}",
+                    "Bus": s.bus.plate_number,
+                    "Departed": s.departure_time.strftime("%H:%M"),
+                    "ETA": s.arrival_time.strftime("%H:%M"),
+                    "Progress": f"{progress:.0f}%",
+                    "Passengers": s.bus.total_seats - s.available_seats,
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        else:
+            st.info("No buses currently on the way.")
 
-    st.divider()
+        st.divider()
 
-    # ─── On the Way (departed but not arrived: departure < now <= arrival) ────
-    st.subheader("🚌 On the Way")
-    ontheway_schedules = (
-        db.query(Schedule)
-        .filter(
-            Schedule.departure_time < now,
-            Schedule.arrival_time >= now
+        # ─── Upcoming Schedules ───────────────────────────────────────────────
+        st.subheader("Upcoming Schedules")
+        upcoming_schedules = (
+            db.query(Schedule)
+            .filter(Schedule.departure_time >= now)
+            .order_by(Schedule.departure_time)
+            .limit(10)
+            .all()
         )
-        .order_by(Schedule.arrival_time)
-        .limit(10)
-        .all()
-    )
-    if ontheway_schedules:
-        rows = []
-        for s in ontheway_schedules:
-            rows.append({
-                "ID": s.id,
-                "Route": f"{s.route.origin} → {s.route.destination}",
-                "Bus": s.bus.plate_number,
-                "Departure": s.departure_time.strftime("%Y-%m-%d %H:%M"),
-                "Arrival": s.arrival_time.strftime("%Y-%m-%d %H:%M"),
-                "Price (RM)": f"{s.price:.2f}",
-                "Seats Left": s.available_seats,
-                "Status": s.status,
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-    else:
-        st.info("No buses currently on the way.")
+        if upcoming_schedules:
+            rows = []
+            for s in upcoming_schedules:
+                booked = s.bus.total_seats - s.available_seats
+                occupancy = (booked / s.bus.total_seats * 100) if s.bus.total_seats > 0 else 0
+                rows.append({
+                    "ID": s.id,
+                    "Route": f"{s.route.origin} → {s.route.destination}",
+                    "Bus": s.bus.plate_number,
+                    "Departure": s.departure_time.strftime("%Y-%m-%d %H:%M"),
+                    "Seats Left": s.available_seats,
+                    "Occupancy": f"{occupancy:.0f}%",
+                    "Status": s.status,
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        else:
+            st.info("No upcoming schedules yet.")
 
-    st.divider()
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 2: FINANCIAL OVERVIEW
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab_finance:
+        # ─── Revenue Snapshot ─────────────────────────────────────────────────
+        st.subheader("Revenue Snapshot")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            metric_card("Today's Revenue", f"RM {metrics['today_revenue']:,.2f}", "emerald")
+        with col2:
+            metric_card("This Week", f"RM {metrics['week_revenue']:,.2f}", "emerald")
+        with col3:
+            metric_card("This Month", f"RM {metrics['month_revenue']:,.2f}", "emerald")
 
-    # ─── Completed Schedules (arrival_time < now) ─────────────────────────────
-    st.subheader("✅ Completed / Past Schedules")
-    past_schedules = (
-        db.query(Schedule)
-        .filter(Schedule.arrival_time < now)
-        .order_by(Schedule.departure_time.desc())
-        .limit(10)
-        .all()
-    )
-    if past_schedules:
-        rows = []
-        for s in past_schedules:
-            rows.append({
-                "ID": s.id,
-                "Route": f"{s.route.origin} → {s.route.destination}",
-                "Bus": s.bus.plate_number,
-                "Departure": s.departure_time.strftime("%Y-%m-%d %H:%M"),
-                "Arrival": s.arrival_time.strftime("%Y-%m-%d %H:%M"),
-                "Price (RM)": f"{s.price:.2f}",
-                "Seats Left": s.available_seats,
-                "Status": s.status,
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-    else:
-        st.info("No completed schedules yet.")
+        st.divider()
+
+        # ─── Booking Metrics ──────────────────────────────────────────────────
+        st.subheader("Booking Metrics")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            metric_card("Today's Bookings", str(metrics['today_bookings']), "blue")
+        with col2:
+            metric_card("Confirmed Today", str(metrics['confirmed_today']), "green")
+        with col3:
+            metric_card("Cancelled Today", str(metrics['cancelled_today']), "rose")
+        with col4:
+            metric_card("Conversion Rate", f"{metrics['conversion_rate']:.1f}%", "purple")
+
+        st.divider()
+
+        # ─── Pending Payments Alert ───────────────────────────────────────────
+        if metrics['pending_amount'] > 0 or alerts['pending_verification']:
+            st.subheader("Payment Alerts")
+            col1, col2 = st.columns(2)
+            with col1:
+                if metrics['pending_amount'] > 0:
+                    st.markdown(f"""
+                    <div class="alert-item alert-warning">
+                        <strong>Pending Payments:</strong> RM {metrics['pending_amount']:,.2f} ({metrics['pending_payments']} bookings)
+                    </div>
+                    """, unsafe_allow_html=True)
+            with col2:
+                if alerts['pending_verification']:
+                    st.markdown(f"""
+                    <div class="alert-item alert-warning">
+                        <strong>Receipts to Verify:</strong> {len(alerts['pending_verification'])} receipt(s) awaiting review
+                    </div>
+                    """, unsafe_allow_html=True)
+            st.divider()
+
+        # ─── Charts Row ───────────────────────────────────────────────────────
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("7-Day Booking Trend")
+            trend_data = get_booking_trends(db, days=7)
+            if trend_data and any(item['count'] > 0 for item in trend_data):
+                trend_df = pd.DataFrame(trend_data)
+                chart = alt.Chart(trend_df).mark_line(point=True).encode(
+                    x=alt.X('date:T', title='Date', axis=alt.Axis(format='%b %d')),
+                    y=alt.Y('count:Q', title='Bookings'),
+                    color=alt.Color('status:N', scale=alt.Scale(
+                        domain=['confirmed', 'pending', 'cancelled'],
+                        range=['#10B981', '#F59E0B', '#EF4444']
+                    ), legend=alt.Legend(title='Status'))
+                ).properties(height=280)
+                st.altair_chart(chart, use_container_width=True)
+            else:
+                st.info("No booking data available for the past 7 days.")
+
+        with col2:
+            st.subheader("Revenue by Route")
+            route_data = get_revenue_by_route(db)
+            if route_data:
+                route_df = pd.DataFrame(route_data)
+                chart = alt.Chart(route_df).mark_bar(color='#009EC2').encode(
+                    x=alt.X('route:N', title='Route', sort='-y', axis=alt.Axis(labelAngle=-45)),
+                    y=alt.Y('revenue:Q', title='Revenue (RM)')
+                ).properties(height=280)
+                st.altair_chart(chart, use_container_width=True)
+            else:
+                st.info("No revenue data available.")
+
+        st.divider()
+
+        # ─── Booking Status Breakdown ─────────────────────────────────────────
+        st.subheader("Booking Status Breakdown")
+        total_confirmed = db.query(Booking).filter(Booking.status == 'confirmed').count()
+        total_pending = db.query(Booking).filter(Booking.status == 'pending_payment').count()
+        total_cancelled = db.query(Booking).filter(Booking.status == 'cancelled').count()
+        total_all = total_confirmed + total_pending + total_cancelled
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.markdown(f"""
+            <div class="status-card status-card-confirmed">
+                <div style="font-size: 2rem; font-weight: 700;">{total_confirmed}</div>
+                <div style="font-size: 0.85rem; opacity: 0.9;">Confirmed</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col2:
+            st.markdown(f"""
+            <div class="status-card status-card-pending">
+                <div style="font-size: 2rem; font-weight: 700;">{total_pending}</div>
+                <div style="font-size: 0.85rem; opacity: 0.9;">Pending</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col3:
+            st.markdown(f"""
+            <div class="status-card status-card-cancelled">
+                <div style="font-size: 2rem; font-weight: 700;">{total_cancelled}</div>
+                <div style="font-size: 0.85rem; opacity: 0.9;">Cancelled</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col4:
+            st.markdown(f"""
+            <div class="status-card" style="background: linear-gradient(135deg, #0A1A3C 0%, #143A75 100%); color: white;">
+                <div style="font-size: 2rem; font-weight: 700;">{total_all}</div>
+                <div style="font-size: 0.85rem; opacity: 0.9;">Total</div>
+            </div>
+            """, unsafe_allow_html=True)
 
     db.close()
 
@@ -832,7 +1158,7 @@ elif page == "bookings":
             # Get bookings for this schedule
             schedule_bookings = db.query(Booking).filter(Booking.schedule_id == schedule.id).all()
             confirmed_bookings = [b for b in schedule_bookings if b.status == "confirmed"]
-            pending_bookings = [b for b in schedule_bookings if b.status == "pending"]
+            pending_bookings = [b for b in schedule_bookings if b.status == "pending_payment"]
             total_revenue = sum(b.total_price for b in confirmed_bookings)
             booked_seats = schedule.bus.total_seats - schedule.available_seats
 
@@ -902,7 +1228,7 @@ elif page == "bookings":
                         st.subheader("✏️ Update Booking")
                         booking_options = {f"#{b.id} - {b.passenger.name} (Seat {b.seat_number or '-'})": b.id for b in filtered_bookings}
                         selected_booking = st.selectbox("Select Booking", list(booking_options.keys()))
-                        new_status = st.selectbox("New Status", ["pending", "confirmed", "cancelled"], key="new_booking_status")
+                        new_status = st.selectbox("New Status", ["pending_payment", "confirmed", "cancelled"], key="new_booking_status")
 
                         if st.button("Update Status", type="primary"):
                             db.query(Booking).filter(Booking.id == booking_options[selected_booking]).update({"status": new_status})

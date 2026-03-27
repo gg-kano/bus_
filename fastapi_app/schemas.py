@@ -7,6 +7,22 @@ from typing import Optional
 class ChatMessage(BaseModel):
     message: str
     session_id: Optional[str] = None
+    passenger_id: Optional[int] = None
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+class LoginRequest(BaseModel):
+    name: str
+    phone: str
+
+
+class PassengerInfo(BaseModel):
+    id: int
+    name: str
+    phone: str
+    email: Optional[str] = None
+    is_new: bool = False
 
 
 class ChatResponse(BaseModel):
@@ -24,8 +40,8 @@ class ScheduleResult(BaseModel):
     arrival_time: str
     price: float
     available_seats: int
-    bus_type: str
-    plate_number: str
+    bus_type: Optional[str] = None
+    plate_number: Optional[str] = None
 
 
 # ── Booking ────────────────────────────────────────────────────────────────────

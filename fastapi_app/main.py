@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -9,13 +10,16 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import uuid
 import json
+import random
 import sys
 import os
 import shutil
 import time
 import logging
+import re
 import contextvars
 from pathlib import Path
+from datetime import datetime
 
 # ── Structured Logging Setup ──────────────────────────────────────────────────
 
@@ -85,21 +89,25 @@ def mask_message(msg: str, max_len: int = 50) -> str:
     return f"{msg[:5]}...{msg[-5:]}" if len(msg) > max_len else f"{msg[:3]}...{msg[-3:]}"
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'admin_panel'))
-from database import SessionLocal, init_db
+from database import SessionLocal, init_db, PaymentReceipt, Booking as BookingModel
 
-from schemas import ChatMessage, ChatResponse, BookingCreate, ReceiptVerificationResult, BookingWithPaymentInfo, SeatInfo
-from agent import chat, chat_stream, check_ollama, OLLAMA_MODEL
-from vlm_service import extract_receipt_data, check_vlm, VLM_MODEL
+from schemas import ChatMessage, ChatResponse, BookingCreate, ReceiptVerificationResult, BookingWithPaymentInfo, SeatInfo, LoginRequest, PassengerInfo, BookingResult
+from agent import chat, chat_stream, check_ollama, classify_intent, load_prompt, OLLAMA_MODEL, close_clients
+from vlm_service import extract_receipt_data, check_vlm, close_vlm_clients
 from receipt_verifier import verify_receipt
 from scheduler import payment_scheduler
 from rag import init_faq_store, get_vector_store
 import crud
-from notifications import (
-    send_booking_confirmation_sms,
-    send_payment_verified_sms,
-    send_cancellation_sms,
-    log_booking_event,
-)
+def log_booking_event(event_type: str, booking_id: int, details: dict) -> None:
+    """Log booking events for analytics/audit purposes (background task)."""
+    event = {
+        "event_type": event_type,
+        "booking_id": booking_id,
+        "timestamp": datetime.now().isoformat(),
+        **details
+    }
+    logger.info(f"[BookingEvent] {event}")
+
 
 # Directory for uploaded receipts
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/tmp/receipts"))
@@ -126,6 +134,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     await payment_scheduler.stop()
     logger.info("Payment scheduler stopped")
+    await close_clients()
+    await close_vlm_clients()
+    logger.info("HTTP clients closed")
 
 
 app = FastAPI(title="Bus Booking API", version="1.0.0", lifespan=lifespan)
@@ -200,11 +211,196 @@ sessions = TTLDict(ttl=1800, maxsize=1000)
 def get_db():
     db = SessionLocal()
     try:
+        # Expire all cached objects to ensure fresh reads from database
+        db.expire_all()
         yield db
     finally:
+        # Rollback any uncommitted transaction to release connection cleanly
+        db.rollback()
         db.close()
 
 
+
+
+# ── Canned Responses ──────────────────────────────────────────────────────────
+
+GIBBERISH_RESPONSE = "Sorry, I didn't understand that. Could you rephrase your question? I can help with bus routes, schedules, bookings, and more!"
+
+GREETING_RESPONSES = [
+    "Hi there! I'm your bus booking assistant. How can I help you today? You can ask about routes, schedules, or make a booking!",
+    "Hello! Welcome to our bus booking service. Feel free to ask about routes, prices, or use /search to find buses!",
+    "Hey! I'm here to help with bus tickets in Malaysia. What would you like to know?",
+]
+
+# ── Payment Prompt Template ──────────────────────────────────────────────────
+PAYMENT_PROMPT = load_prompt("payment_prompt.txt")
+
+_BOOKING_ID_RE = re.compile(r'(?:booking\s*(?:no\.?|number|#)?\s*#?\s*(\d+))|(?:#(\d+))', re.IGNORECASE)
+
+
+def extract_booking_id(message: str) -> int | None:
+    """Extract a booking ID from a user message. Returns the first match or None."""
+    m = _BOOKING_ID_RE.search(message)
+    if m:
+        return int(m.group(1) or m.group(2))
+    return None
+
+
+# ── Context Building ──────────────────────────────────────────────────────────
+
+def build_db_context(db: Session, message: str) -> tuple[str, dict]:
+    """Build database context and db_info for a user message. Returns (context_str, db_info)."""
+    db_summary = crud.get_db_summary(db)
+
+    origins = set()
+    destinations = set()
+    for route in db_summary.get('routes', []):
+        if '\u2192' in route:
+            parts = route.split('\u2192')
+            origins.add(parts[0].strip())
+            destinations.add(parts[1].strip())
+
+    db_context = f"""
+DATABASE INFO:
+- Departure cities (origins): {', '.join(sorted(origins)) if origins else 'None'}
+- Destination cities: {', '.join(sorted(destinations)) if destinations else 'None'}
+- Available routes: {', '.join(db_summary['routes'][:10])}
+- Total routes: {db_summary['total_routes']}
+- Total upcoming schedules: {db_summary['total_schedules']}
+- Total available seats: {db_summary['total_available_seats']}
+"""
+
+    msg_lower = message.lower()
+    cities = ["kuala lumpur", "kl", "penang", "johor bahru", "jb", "ipoh", "melaka",
+              "kuantan", "kota bharu", "kuching", "kota kinabalu", "alor setar",
+              "seremban", "taiping", "muar", "shah alam", "subang jaya", "subang",
+              "petaling jaya", "pj"]
+
+    # Extract cities by order of appearance in the message (not list order)
+    # This ensures "from Penang to KL" correctly assigns origin=Penang, dest=KL
+    city_positions = []
+    for city in cities:
+        pos = msg_lower.find(city)
+        if pos != -1:
+            # Skip if this match is a substring of an already-found longer city
+            # e.g. don't match "kl" if "kuala lumpur" was already found at an overlapping position
+            is_substring = False
+            for existing_city, existing_pos in city_positions:
+                if pos >= existing_pos and pos + len(city) <= existing_pos + len(existing_city):
+                    is_substring = True
+                    break
+            if not is_substring:
+                # Remove any shorter city that is a substring of this one
+                city_positions = [
+                    (ec, ep) for ec, ep in city_positions
+                    if not (ep >= pos and ep + len(ec) <= pos + len(city))
+                ]
+                city_positions.append((city, pos))
+
+    # Sort by position in message to respect user's "from X to Y" order
+    city_positions.sort(key=lambda x: x[1])
+    mentioned_cities = [city for city, _ in city_positions]
+
+    # Extract date hints from the message for schedule filtering
+    date_hint = None
+    date_keywords = ["today", "tomorrow", "tonight", "esok", "hari ini", "malam ini",
+                     "next week", "minggu depan"]
+    for kw in date_keywords:
+        if kw in msg_lower:
+            date_hint = kw
+            break
+    if not date_hint:
+        # Try to find date patterns like "26 march", "2026-03-27", "27/3"
+        date_match = re.search(r'\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*', msg_lower)
+        if date_match:
+            date_hint = date_match.group(0)
+
+    schedules = []
+    if mentioned_cities or any(word in msg_lower for word in ["schedule", "seat", "bus", "available", "price", "harga", "berapa"]):
+        origin = mentioned_cities[0] if mentioned_cities else None
+        dest = mentioned_cities[1] if len(mentioned_cities) > 1 else None
+        schedules = crud.get_route_schedules(db, origin, dest, travel_date=date_hint)
+        if schedules:
+            schedule_info = "\n".join([
+                f"  - {s['route']}: {s['departure']} | {s['price']} | {s['available_seats']} seats | {s['bus_type']}"
+                for s in schedules[:10]
+            ])
+            db_context += f"\nUPCOMING SCHEDULES:\n{schedule_info}"
+        else:
+            db_context += f"\nNo schedules found for the requested route."
+
+    db_info = {
+        "summary": db_summary,
+        "schedules": schedules if schedules else None,
+    }
+
+    return db_context, db_info
+
+
+def build_user_context(db: Session, passenger_id: int) -> str:
+    """Build personalized user context for the LLM."""
+    from database import Passenger as PassengerModel
+    passenger = db.query(PassengerModel).filter(PassengerModel.id == passenger_id).first()
+    if not passenger:
+        return ""
+
+    ctx = f"\nUSER INFO:\n- Name: {passenger.name}\n- Phone: {passenger.phone}\n"
+
+    bookings = crud.get_bookings_by_passenger(db, passenger_id)
+    active = [b for b in bookings if b.status in ("pending_payment", "confirmed")]
+    if active:
+        lines = []
+        for b in active[:5]:
+            lines.append(f"  - Booking #{b.booking_id}: {b.origin} → {b.destination} on {b.departure_time} (Seat {b.seat_number}, {b.status})")
+        ctx += f"\nUSER'S ACTIVE BOOKINGS:\n" + "\n".join(lines) + "\n"
+
+    return ctx
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AUTH ENDPOINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/auth/login", response_model=PassengerInfo)
+@limiter.limit("20/minute")
+def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
+    """Login or register a passenger by phone number."""
+    passenger_info, is_new = crud.get_or_create_passenger(db, req.name, req.phone)
+    passenger_info.is_new = is_new
+    return passenger_info
+
+
+@app.get("/passengers/{passenger_id}/bookings", response_model=list[BookingResult])
+def get_passenger_bookings(passenger_id: int, db: Session = Depends(get_db)):
+    """Get all bookings for a passenger."""
+    return crud.get_bookings_by_passenger(db, passenger_id)
+
+
+# ── Session Helpers ───────────────────────────────────────────────────────────
+
+def _get_session(session_id: str) -> dict:
+    """Get session data dict, migrating old list format if needed."""
+    data = sessions.get(session_id)
+    if data is None:
+        return {"history": [], "passenger_id": None}
+    if isinstance(data, list):
+        # Migrate old format
+        return {"history": data, "passenger_id": None}
+    return data
+
+
+def _get_history(session_id: str) -> list:
+    return _get_session(session_id)["history"]
+
+
+def _save_history(session_id: str, history: list, passenger_id: int | None = None):
+    if len(history) > 20:
+        history = history[-20:]
+    session = _get_session(session_id)
+    session["history"] = history
+    if passenger_id is not None:
+        session["passenger_id"] = passenger_id
+    sessions.set(session_id, session)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -218,70 +414,63 @@ async def chat_endpoint(request: Request, req: ChatMessage, db: Session = Depend
 
     session_id = req.session_id or str(uuid.uuid4())
 
-    # Get conversation history for context (last few messages)
-    history = sessions.get(session_id) or []
-    history_context = "\n".join(history[-6:]) if history else ""
-
-    # Build database context for the agent
-    db_summary = crud.get_db_summary(db)
-    db_context = f"""
-DATABASE INFO:
-- Available routes: {', '.join(db_summary['routes'][:10])}
-- Total routes: {db_summary['total_routes']}
-- Total upcoming schedules: {db_summary['total_schedules']}
-- Total available seats: {db_summary['total_available_seats']}
-"""
-
-    # If user asks about specific route, add schedule details
-    msg_lower = req.message.lower()
-    # Check for city mentions
-    cities = ["kuala lumpur", "kl", "penang", "johor bahru", "jb", "ipoh", "melaka",
-              "kuantan", "kota bharu", "kuching", "kota kinabalu", "alor setar",
-              "seremban", "taiping", "muar"]
-    mentioned_cities = [c for c in cities if c in msg_lower]
-
-    # Initialize schedules
-    schedules = []
-
-    if mentioned_cities or any(word in msg_lower for word in ["schedule", "seat", "bus", "available", "price", "harga", "berapa"]):
-        # Get relevant schedules
-        origin = mentioned_cities[0] if mentioned_cities else None
-        dest = mentioned_cities[1] if len(mentioned_cities) > 1 else None
-        schedules = crud.get_route_schedules(db, origin, dest)
-        if schedules:
-            schedule_info = "\n".join([
-                f"  - {s['route']}: {s['departure']} | {s['price']} | {s['available_seats']} seats | {s['bus_type']}"
-                for s in schedules[:5]
-            ])
-            db_context += f"\nUPCOMING SCHEDULES:\n{schedule_info}"
-        else:
-            db_context += f"\nNo schedules found for the requested route."
-
-    # Combine all context
-    context = f"{db_context}\n\nCONVERSATION HISTORY:\n{history_context}" if history_context else db_context
-
-    # Build db_info dict for fallback responses
-    db_info = {
-        "summary": db_summary,
-        "schedules": schedules if schedules else None,
-    }
-
     # Debug logging (PII masked)
     logger.info(f"[Chat] User message: {mask_message(req.message)}")
+
+    # ── Intent classification ────────────────────────────────────────────────
+    intent = await classify_intent(req.message)
+    logger.info(f"[Chat] Intent: {intent}")
+
+    # ── Fast-path: gibberish / greeting → canned response, no LLM call ──────
+    if intent == "gibberish":
+        return ChatResponse(reply=GIBBERISH_RESPONSE, session_id=session_id)
+
+    if intent == "greeting":
+        reply = random.choice(GREETING_RESPONSES)
+        history = _get_history(session_id)
+        history.append(f"User: {req.message}")
+        history.append(f"Assistant: {reply}")
+        _save_history(session_id, history, req.passenger_id)
+        return ChatResponse(reply=reply, session_id=session_id)
+
+    # ── Build context based on intent ────────────────────────────────────────
+    history = _get_history(session_id)
+    history_context = "\n".join(history[-6:]) if history else ""
+
+    db_info = None
+
+    if intent == "faq":
+        context = f"CONVERSATION HISTORY:\n{history_context}" if history_context else ""
+    else:
+        db_context, db_info = build_db_context(db, req.message)
+        context = f"{db_context}\n\nCONVERSATION HISTORY:\n{history_context}" if history_context else db_context
+
+    # ── Inject user context for logged-in users ──────────────────────────
+    if req.passenger_id:
+        user_ctx = build_user_context(db, req.passenger_id)
+        if user_ctx:
+            context = f"{user_ctx}\n{context}"
+
+    # ── Inject payment instructions for booking intent ────────────────────
+    if intent == "booking":
+        bid = extract_booking_id(req.message)
+        if bid:
+            payment_info = crud.get_booking_payment_info(db, bid)
+            if payment_info:
+                payment_context = PAYMENT_PROMPT.format(**payment_info)
+                context = f"{payment_context}\n\n{context}"
+
     logger.debug(f"[Chat] Context length: {len(context)} chars")
 
     # Get agent response
     reply = await chat(req.message, context, db_info)
     logger.info(f"[Chat] Reply length: {len(reply)} chars")
 
-    # Store in history (using TTLDict)
-    history = sessions.get(session_id) or []
+    # Store in history
+    history = _get_history(session_id)
     history.append(f"User: {req.message}")
     history.append(f"Assistant: {reply}")
-    # Keep history manageable (last 20 messages)
-    if len(history) > 20:
-        history = history[-20:]
-    sessions.set(session_id, history)
+    _save_history(session_id, history, req.passenger_id)
 
     return ChatResponse(
         reply=reply,
@@ -298,33 +487,66 @@ async def chat_stream_endpoint(req: ChatMessage, db: Session = Depends(get_db)):
     """Streaming chat endpoint - returns SSE tokens."""
 
     session_id = req.session_id or str(uuid.uuid4())
-    history = sessions.get(session_id) or []
+
+    # ── Intent classification ────────────────────────────────────────────────
+    intent = await classify_intent(req.message)
+    logger.info(f"[ChatStream] Intent: {intent}")
+
+    # ── Fast-path: gibberish / greeting → emit canned response as single token
+    if intent in ("gibberish", "greeting"):
+        if intent == "gibberish":
+            canned = GIBBERISH_RESPONSE
+        else:
+            import random
+            canned = random.choice(GREETING_RESPONSES)
+
+        async def canned_stream():
+            yield f"data: {json.dumps({'type': 'meta', 'session_id': session_id})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'text': canned})}\n\n"
+            hist = _get_history(session_id)
+            hist.append(f"User: {req.message}")
+            hist.append(f"Assistant: {canned}")
+            _save_history(session_id, hist, req.passenger_id)
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(canned_stream(), media_type="text/event-stream")
+
+    # ── Build context based on intent ────────────────────────────────────────
+    history = _get_history(session_id)
     history_context = "\n".join(history[-6:]) if history else ""
 
-    # Build database context (same as /chat)
-    db_summary = crud.get_db_summary(db)
-    db_context = f"""
-DATABASE INFO:
-- Available routes: {', '.join(db_summary['routes'][:10])}
-- Total routes: {db_summary['total_routes']}
-- Total upcoming schedules: {db_summary['total_schedules']}
-- Total available seats: {db_summary['total_available_seats']}
-"""
-    context = f"{db_context}\n\nCONVERSATION HISTORY:\n{history_context}" if history_context else db_context
+    if intent == "faq":
+        context = f"CONVERSATION HISTORY:\n{history_context}" if history_context else ""
+    else:
+        db_context, _ = build_db_context(db, req.message)
+        context = f"{db_context}\n\nCONVERSATION HISTORY:\n{history_context}" if history_context else db_context
+
+    # ── Inject user context for logged-in users ──────────────────────────
+    if req.passenger_id:
+        user_ctx = build_user_context(db, req.passenger_id)
+        if user_ctx:
+            context = f"{user_ctx}\n{context}"
+
+    # ── Inject payment instructions for booking intent ────────────────────
+    if intent == "booking":
+        bid = extract_booking_id(req.message)
+        if bid:
+            payment_info = crud.get_booking_payment_info(db, bid)
+            if payment_info:
+                payment_context = PAYMENT_PROMPT.format(**payment_info)
+                context = f"{payment_context}\n\n{context}"
 
     async def event_stream():
+        yield f"data: {json.dumps({'type': 'meta', 'session_id': session_id})}\n\n"
         full_reply = ""
         async for token in chat_stream(req.message, context):
             full_reply += token
             yield f"data: {json.dumps({'type': 'token', 'text': token})}\n\n"
 
-        # Store in history after streaming completes (using TTLDict)
-        hist = sessions.get(session_id) or []
+        hist = _get_history(session_id)
         hist.append(f"User: {req.message}")
         hist.append(f"Assistant: {full_reply}")
-        if len(hist) > 20:
-            hist = hist[-20:]
-        sessions.set(session_id, hist)
+        _save_history(session_id, hist, req.passenger_id)
 
         yield "data: [DONE]\n\n"
 
@@ -384,25 +606,11 @@ def create_booking(
         # Get schedule info for notification
         schedule = db.query(crud.Schedule).filter(crud.Schedule.id == data.schedule_id).first()
 
-        # Queue background notification tasks
-        background_tasks.add_task(
-            send_booking_confirmation_sms,
-            phone=data.passenger_phone,
-            booking_id=result.booking.id,
-            passenger_name=data.passenger_name,
-            origin=schedule.origin if schedule else "Unknown",
-            destination=schedule.destination if schedule else "Unknown",
-            departure_time=str(schedule.departure_time) if schedule else "Unknown",
-            seat_number=result.booking.seat_number,
-            amount=result.payment_info.amount,
-            payment_reference=result.payment_info.reference
-        )
-
         # Log booking event for analytics
         background_tasks.add_task(
             log_booking_event,
             event_type="booking_created",
-            booking_id=result.booking.id,
+            booking_id=result.booking.booking_id,
             details={
                 "schedule_id": data.schedule_id,
                 "num_passengers": data.num_passengers,
@@ -416,11 +624,14 @@ def create_booking(
 
 
 @app.get("/bookings/{booking_id}")
-def get_booking(booking_id: int, db: Session = Depends(get_db)):
-    """Get booking by ID."""
-    booking = crud.get_booking(db, booking_id)
-    if not booking:
+def get_booking(booking_id: int, passenger_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get booking by ID. Optional passenger_id for ownership check."""
+    booking_row = db.query(crud.Booking).filter(crud.Booking.id == booking_id).first()
+    if not booking_row:
         raise HTTPException(status_code=404, detail="Booking not found")
+    if passenger_id and booking_row.passenger_id != passenger_id:
+        raise HTTPException(status_code=403, detail="This booking belongs to another passenger")
+    booking = crud.get_booking(db, booking_id)
     return booking
 
 
@@ -428,32 +639,26 @@ def get_booking(booking_id: int, db: Session = Depends(get_db)):
 def cancel_booking(
     booking_id: int,
     background_tasks: BackgroundTasks,
+    passenger_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
-    """Cancel a booking."""
-    # Get booking info before cancellation for notification
+    """Cancel a booking. Optional passenger_id for ownership check."""
     booking = db.query(crud.Booking).filter(crud.Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found or already cancelled")
+    if passenger_id and booking.passenger_id != passenger_id:
+        raise HTTPException(status_code=403, detail="This booking belongs to another passenger")
 
     success = crud.cancel_booking(db, booking_id)
     if not success:
         raise HTTPException(status_code=404, detail="Booking not found or already cancelled")
 
-    # Queue cancellation notification
-    if booking:
-        background_tasks.add_task(
-            send_cancellation_sms,
-            phone=booking.passenger_phone,
-            booking_id=booking_id,
-            passenger_name=booking.passenger_name,
-            reason="User requested"
-        )
-
-        background_tasks.add_task(
-            log_booking_event,
-            event_type="booking_cancelled",
-            booking_id=booking_id,
-            details={"reason": "user_requested"}
-        )
+    background_tasks.add_task(
+        log_booking_event,
+        event_type="booking_cancelled",
+        booking_id=booking_id,
+        details={"reason": "user_requested"}
+    )
 
     return {"message": f"Booking #{booking_id} cancelled."}
 
@@ -533,7 +738,7 @@ async def upload_receipt(
     # Step 2: Verify extracted data against database
     extracted_data = {
         "amount_found": extraction_result.amount_found,
-        "recipient": extraction_result.recipient,
+        "recipient_account": extraction_result.recipient_account,
         "reference_found": extraction_result.reference_found,
         "transaction_time": extraction_result.transaction_time,
     }
@@ -556,22 +761,6 @@ async def upload_receipt(
 
     # Send payment verified notification if successful
     if result["status"] == "confirmed":
-        # Get full booking details for notification
-        booking_obj = db.query(crud.Booking).filter(crud.Booking.id == booking_id).first()
-        schedule = db.query(crud.Schedule).filter(crud.Schedule.id == booking_obj.schedule_id).first() if booking_obj else None
-
-        if booking_obj and schedule:
-            background_tasks.add_task(
-                send_payment_verified_sms,
-                phone=booking_obj.passenger_phone,
-                booking_id=booking_id,
-                passenger_name=booking_obj.passenger_name,
-                origin=schedule.origin,
-                destination=schedule.destination,
-                departure_time=str(schedule.departure_time),
-                seat_number=booking_obj.seat_number
-            )
-
         background_tasks.add_task(
             log_booking_event,
             event_type="payment_verified",
@@ -605,7 +794,6 @@ def get_payment_status(booking_id: int, db: Session = Depends(get_db)):
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
 
-    from database import PaymentReceipt, Booking as BookingModel
     receipt = db.query(PaymentReceipt).filter(
         PaymentReceipt.booking_id == booking_id
     ).first()
@@ -666,5 +854,5 @@ async def vlm_health():
     """Check VLM service health."""
     ok = await check_vlm()
     if not ok:
-        raise HTTPException(status_code=503, detail=f"VLM model '{VLM_MODEL}' not available")
-    return {"status": "ok", "model": VLM_MODEL}
+        raise HTTPException(status_code=503, detail=f"VLM model '{OLLAMA_MODEL}' not available")
+    return {"status": "ok", "model": OLLAMA_MODEL}

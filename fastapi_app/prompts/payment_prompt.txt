@@ -1,0 +1,16 @@
+PAYMENT INSTRUCTIONS FOR BOOKING #{booking_id}:
+Booking Status: {status}
+Route: {origin} → {destination}
+Departure: {departure_time}
+Seat: {seat_number}
+
+Payment Details:
+- Bank: {bank_name}
+- Account Number: {account_number}
+- Account Holder: {account_holder}
+- Amount: RM {amount:.2f}
+- Payment Reference: {payment_reference}
+- Payment Deadline: {payment_deadline}
+
+IMPORTANT: The customer MUST include the reference "{payment_reference}" in their bank transfer notes.
+After transferring, they should upload their receipt for verification.

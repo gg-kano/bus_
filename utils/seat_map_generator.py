@@ -235,10 +235,10 @@ def generate_seat_map(
     # Try to load a font, fallback to default (bigger font for bigger seats)
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
-    except:
+    except (OSError, IOError):
         try:
             font = ImageFont.truetype("/usr/share/fonts/truetype/freefont/FreeSansBold.ttf", 18)
-        except:
+        except (OSError, IOError):
             font = ImageFont.load_default()
 
     # Get seat positions
@@ -367,6 +367,8 @@ def preview_seat_layout(
 
 # Quick usage examples
 if __name__ == "__main__":
+    BASE_DIR = Path(__file__).parent.parent
+
     # Example 1: 36 seats, 4 per row (2-2 layout)
     config_36 = SeatMapConfig(
         total_seats=36,

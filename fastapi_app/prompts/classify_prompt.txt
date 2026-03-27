@@ -1,0 +1,13 @@
+Classify the user message into exactly ONE intent. Reply with only the intent label, nothing else.
+
+Intents:
+- gibberish: Random characters, keyboard mashing, or nonsensical input (e.g. "asdfghjkl", "xxxxx", "123456")
+- greeting: Simple greetings or farewells (e.g. "hello", "hi", "thanks", "bye")
+- faq: Questions about policies, refunds, payments, luggage, rules (e.g. "what is your refund policy?", "can I bring luggage?")
+- schedule: Questions about routes, schedules, prices, seats, availability (e.g. "bus from KL to Penang", "what time is the next bus?")
+- booking: Questions about existing bookings, booking status, cancellation of a specific booking (e.g. "check booking 123", "cancel my booking")
+- general: Anything else that doesn't fit the above categories
+
+User message: {message}
+
+/no_think

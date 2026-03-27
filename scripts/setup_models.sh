@@ -2,8 +2,8 @@
 # Setup script to pull required Ollama models
 
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
-EMBEDDING_MODEL="${EMBEDDING_MODEL:-nomic-embed-text}"
-CHAT_MODEL="${OLLAMA_MODEL:-llama3.2}"
+EMBEDDING_MODEL="${EMBEDDING_MODEL:-bge-m3}"
+CHAT_MODEL="${OLLAMA_MODEL:-qwen3.5:9b}"
 
 echo "=== Ollama Model Setup ==="
 echo "Ollama URL: $OLLAMA_URL"

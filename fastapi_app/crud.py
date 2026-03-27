@@ -11,65 +11,38 @@ logger = logging.getLogger(__name__)
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'admin_panel'))
 from database import Route, Schedule, Passenger, Booking, Bus, PaymentReceipt, BankAccount
-from schemas import BookingCreate, ScheduleResult, BookingResult, PaymentInfo, BookingWithPaymentInfo, SeatInfo
+from schemas import BookingCreate, ScheduleResult, BookingResult, PaymentInfo, BookingWithPaymentInfo, SeatInfo, PassengerInfo
 
 # Payment deadline in minutes
 PAYMENT_DEADLINE_MINUTES = 10
 
 # ── City Name Normalization ───────────────────────────────────────────────────
-# Map alternate names/spellings to canonical city names
-CITY_ALIASES = {
-    # Kuala Lumpur
-    "kl": "Kuala Lumpur",
-    "kuala lumpur": "Kuala Lumpur",
-    "klcc": "Kuala Lumpur",
-    # Penang
-    "penang": "Penang",
-    "pulau pinang": "Penang",
-    "georgetown": "Penang",
-    "butterworth": "Penang",
-    # Johor Bahru
-    "jb": "Johor Bahru",
-    "johor bahru": "Johor Bahru",
-    "johor": "Johor Bahru",
-    # Ipoh
-    "ipoh": "Ipoh",
-    # Melaka
-    "melaka": "Melaka",
-    "malacca": "Melaka",
-    # Kuantan
-    "kuantan": "Kuantan",
-    # Kota Bharu
-    "kota bharu": "Kota Bharu",
-    "kb": "Kota Bharu",
-    "kelantan": "Kota Bharu",
-    # Kuching
-    "kuching": "Kuching",
-    "sarawak": "Kuching",
-    # Kota Kinabalu
-    "kota kinabalu": "Kota Kinabalu",
-    "kk": "Kota Kinabalu",
-    "sabah": "Kota Kinabalu",
-    # Alor Setar
-    "alor setar": "Alor Setar",
-    "alor star": "Alor Setar",
-    "kedah": "Alor Setar",
-    # Seremban
-    "seremban": "Seremban",
-    "negeri sembilan": "Seremban",
-    # Taiping
-    "taiping": "Taiping",
-    # Muar
-    "muar": "Muar",
-    # Shah Alam
-    "shah alam": "Shah Alam",
-    # Subang
-    "subang": "Subang Jaya",
-    "subang jaya": "Subang Jaya",
-    # Petaling Jaya
-    "pj": "Petaling Jaya",
-    "petaling jaya": "Petaling Jaya",
+# Canonical city name → list of extra aliases (canonical name is auto-included)
+_CITY_ALIAS_MAP = {
+    "Kuala Lumpur":  ["kl", "klcc"],
+    "Penang":        ["pulau pinang", "georgetown", "butterworth"],
+    "Johor Bahru":   ["jb", "johor"],
+    "Ipoh":          [],
+    "Melaka":        ["malacca"],
+    "Kuantan":       [],
+    "Kota Bharu":    ["kb", "kelantan"],
+    "Kuching":       ["sarawak"],
+    "Kota Kinabalu": ["kk", "sabah"],
+    "Alor Setar":    ["alor star", "kedah"],
+    "Seremban":      ["negeri sembilan"],
+    "Taiping":       [],
+    "Muar":          [],
+    "Shah Alam":     [],
+    "Subang Jaya":   ["subang"],
+    "Petaling Jaya": ["pj"],
 }
+
+# Build flat lookup: every alias (+ lowercased canonical name) → canonical
+CITY_ALIASES = {}
+for _canonical, _aliases in _CITY_ALIAS_MAP.items():
+    CITY_ALIASES[_canonical.lower()] = _canonical
+    for _alias in _aliases:
+        CITY_ALIASES[_alias.lower()] = _canonical
 
 # Try to import rapidfuzz for fuzzy matching (optional dependency)
 try:
@@ -166,13 +139,68 @@ def normalize_city(city: str) -> str:
 
 
 def generate_payment_reference(db: Session) -> str:
-    """Generate a unique random 6-digit payment reference."""
-    while True:
-        ref = f"BUS{random.randint(100000, 999999)}"
-        # Check if reference already exists
-        existing = db.query(Booking).filter(Booking.payment_reference == ref).first()
-        if not existing:
-            return ref
+    """Generate a payment reference."""
+    return "S091838 621"
+
+
+# ── Passenger Auth ────────────────────────────────────────────────────────────
+
+def get_or_create_passenger(db: Session, name: str, phone: str) -> tuple[PassengerInfo, bool]:
+    """Get existing passenger by phone or create a new one.
+    Returns (PassengerInfo, is_new)."""
+    passenger = db.query(Passenger).filter(Passenger.phone == phone).first()
+
+    if passenger:
+        # Update name if it changed
+        if passenger.name != name:
+            passenger.name = name
+            db.commit()
+            db.refresh(passenger)
+        return PassengerInfo(
+            id=passenger.id,
+            name=passenger.name,
+            phone=passenger.phone,
+            email=passenger.email,
+            is_new=False,
+        ), False
+
+    passenger = Passenger(name=name, phone=phone)
+    db.add(passenger)
+    db.commit()
+    db.refresh(passenger)
+    return PassengerInfo(
+        id=passenger.id,
+        name=passenger.name,
+        phone=passenger.phone,
+        email=passenger.email,
+        is_new=True,
+    ), True
+
+
+def get_bookings_by_passenger(db: Session, passenger_id: int) -> List[BookingResult]:
+    """Get all bookings for a passenger."""
+    bookings = (
+        db.query(Booking)
+        .filter(Booking.passenger_id == passenger_id)
+        .order_by(Booking.booked_at.desc())
+        .all()
+    )
+    return [
+        BookingResult(
+            booking_id=b.id,
+            passenger_name=b.passenger.name,
+            origin=b.schedule.route.origin,
+            destination=b.schedule.route.destination,
+            departure_time=b.schedule.departure_time.strftime("%Y-%m-%d %H:%M"),
+            seat_number=b.seat_number or "-",
+            total_price=b.total_price,
+            status=b.status,
+            booked_at=b.booked_at.strftime("%Y-%m-%d %H:%M:%S") if b.booked_at else None,
+            payment_deadline=b.payment_deadline.strftime("%Y-%m-%d %H:%M:%S") if b.payment_deadline else None,
+            payment_reference=b.payment_reference,
+        )
+        for b in bookings
+    ]
 
 
 # ── Search Schedules ───────────────────────────────────────────────────────────
@@ -189,6 +217,7 @@ def search_schedules(
     # Normalize city names for better matching
     norm_origin = normalize_city(origin)
     norm_dest = normalize_city(destination)
+    logger.info(f"[Search] Searching: '{origin}'->'{norm_origin}' to '{destination}'->'{norm_dest}', date={travel_date}")
 
     query = (
         db.query(Schedule)
@@ -198,7 +227,6 @@ def search_schedules(
             Route.origin.ilike(f"%{norm_origin}%"),
             Route.destination.ilike(f"%{norm_dest}%"),
             Schedule.status == "active",
-            Schedule.available_seats > 0,
             Schedule.departure_time >= now  # Only show upcoming schedules
         )
     )
@@ -216,6 +244,7 @@ def search_schedules(
         # If d is None, we just return all upcoming schedules (no date filter)
 
     schedules = query.order_by(Schedule.departure_time).all()
+    logger.info(f"[Search] Found {len(schedules)} schedules for {norm_origin} -> {norm_dest}")
 
     return [
         ScheduleResult(
@@ -351,7 +380,7 @@ def create_booking(db: Session, data: BookingCreate) -> BookingResult:
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        logger.warning(f"Seat booking race condition caught: seat {seat_num} on schedule {data.schedule_id}")
+        logger.warning(f"Booking IntegrityError: {e} | seat {seat_num} on schedule {data.schedule_id}")
         raise ValueError(f"Seat {seat_num} was just booked by another user. Please select a different seat.")
 
     db.refresh(booking)
@@ -441,8 +470,9 @@ def cancel_booking(db: Session, booking_id: int) -> bool:
         return False
 
     booking.status = "cancelled"
-    # Return seat back
-    booking.schedule.available_seats += 1
+    # Return seats back (calculate from total_price / ticket price)
+    num_seats = max(1, round(booking.total_price / booking.schedule.price)) if booking.schedule.price else 1
+    booking.schedule.available_seats += num_seats
     db.commit()
     return True
 
@@ -453,10 +483,6 @@ def get_db_summary(db: Session) -> dict:
     """Get summary of database for agent context."""
     from sqlalchemy import func
     now = datetime.now()
-
-    # Get all unique routes
-    routes = db.query(Route).all()
-    route_list = list(set([f"{r.origin} → {r.destination}" for r in routes]))
 
     # Count active upcoming schedules
     total_schedules = db.query(Schedule).filter(
@@ -470,8 +496,10 @@ def get_db_summary(db: Session) -> dict:
         Schedule.departure_time >= now
     ).scalar() or 0
 
-    # Get schedule summary by route
+    # Get schedule summary by route — only include routes with upcoming active schedules
+    routes = db.query(Route).all()
     schedule_summary = []
+    active_routes = []
     for route in routes:
         schedules = db.query(Schedule).filter(
             Schedule.route_id == route.id,
@@ -480,23 +508,25 @@ def get_db_summary(db: Session) -> dict:
         ).all()
         if schedules:
             total_route_seats = sum(s.available_seats for s in schedules)
+            route_name = f"{route.origin} → {route.destination}"
+            active_routes.append(route_name)
             schedule_summary.append({
-                "route": f"{route.origin} → {route.destination}",
+                "route": route_name,
                 "num_schedules": len(schedules),
                 "total_seats": total_route_seats,
             })
 
     return {
-        "routes": route_list,
-        "total_routes": len(route_list),
+        "routes": active_routes,
+        "total_routes": len(active_routes),
         "total_schedules": total_schedules,
         "total_available_seats": total_seats,
         "schedule_by_route": schedule_summary,
     }
 
 
-def get_route_schedules(db: Session, origin: str = None, destination: str = None) -> list:
-    """Get upcoming schedules, optionally filtered by route."""
+def get_route_schedules(db: Session, origin: str = None, destination: str = None, travel_date: Optional[str] = None) -> list:
+    """Get upcoming schedules, optionally filtered by route and date."""
     now = datetime.now()
 
     query = (
@@ -516,6 +546,17 @@ def get_route_schedules(db: Session, origin: str = None, destination: str = None
     if destination:
         norm_dest = normalize_city(destination)
         query = query.filter(Route.destination.ilike(f"%{norm_dest}%"))
+
+    # Filter by date if provided
+    if travel_date:
+        d = resolve_date(travel_date)
+        if d:
+            query = query.filter(
+                and_(
+                    Schedule.departure_time >= datetime.combine(d, datetime.min.time()),
+                    Schedule.departure_time <= datetime.combine(d, datetime.max.time())
+                )
+            )
 
     schedules = query.order_by(Schedule.departure_time).limit(10).all()
 
@@ -625,13 +666,14 @@ def cancel_expired_bookings(db: Session) -> List[int]:
     cancelled_ids = []
     for booking in expired_bookings:
         booking.status = "cancelled"
-        # Return seat back to schedule
-        booking.schedule.available_seats += 1
+        # Return seats back to schedule
+        num_seats = max(1, round(booking.total_price / booking.schedule.price)) if booking.schedule.price else 1
+        booking.schedule.available_seats += num_seats
         cancelled_ids.append(booking.id)
 
     if cancelled_ids:
         db.commit()
-        print(f"[Scheduler] Cancelled {len(cancelled_ids)} expired bookings: {cancelled_ids}")
+        logger.info(f"[Scheduler] Cancelled {len(cancelled_ids)} expired bookings: {cancelled_ids}")
 
     return cancelled_ids
 
@@ -639,3 +681,36 @@ def cancel_expired_bookings(db: Session) -> List[int]:
 def get_pending_payment_bookings(db: Session) -> List[Booking]:
     """Get all bookings waiting for payment."""
     return db.query(Booking).filter(Booking.status == "pending_payment").all()
+
+
+def get_booking_payment_info(db: Session, booking_id: int) -> Optional[dict]:
+    """Get booking + bank account details for payment instructions.
+
+    Returns a dict with all template fields, or None if booking not found
+    or not in pending_payment status.
+    """
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking or booking.status != "pending_payment":
+        return None
+
+    bank_account = db.query(BankAccount).filter(BankAccount.is_active == 1).first()
+    if not bank_account:
+        return None
+
+    schedule = booking.schedule
+    route = schedule.route
+
+    return {
+        "booking_id": booking.id,
+        "origin": route.origin,
+        "destination": route.destination,
+        "departure_time": schedule.departure_time.strftime("%Y-%m-%d %H:%M"),
+        "seat_number": booking.seat_number or "-",
+        "bank_name": bank_account.bank_name,
+        "account_number": bank_account.account_number,
+        "account_holder": bank_account.account_holder,
+        "amount": booking.total_price,
+        "payment_reference": booking.payment_reference,
+        "payment_deadline": booking.payment_deadline.strftime("%Y-%m-%d %H:%M:%S") if booking.payment_deadline else "N/A",
+        "status": booking.status,
+    }

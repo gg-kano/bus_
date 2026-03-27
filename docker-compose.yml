@@ -3,14 +3,14 @@ services:
   # ── Ollama (your existing service) ─────────────────────────────────────────
   ollama:
     image: ollama/ollama:latest
-    container_name: ollama
+    container_name: bus_ollama
     restart: unless-stopped
     volumes:
       - ollama_data:/root/.ollama
       - ./scripts/ollama-entrypoint.sh:/ollama-entrypoint.sh
     entrypoint: ["/bin/bash", "/ollama-entrypoint.sh"]
     environment:
-      - OLLAMA_MODELS=nomic-embed-text llama3.2
+      - OLLAMA_MODELS=qwen3.5:9b bge-m3
     networks:
       - bus_agent_net
     deploy:
@@ -18,14 +18,14 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["0"]
+              device_ids: ["2"]
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 120s
 
   # ── PostgreSQL ──────────────────────────────────────────────────────────────
   postgres:
@@ -60,7 +60,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-bus_booking}
       TZ: Asia/Kuala_Lumpur
     ports:
-      - "8501:8501"
+      - "6501:8501"
     networks:
       - bus_agent_net
     depends_on:
@@ -81,7 +81,7 @@ services:
       FASTAPI_URL: http://fastapi:8000
       TZ: Asia/Kuala_Lumpur
     ports:
-      - "8470:8502"
+      - "6502:8502"
     networks:
       - bus_agent_net
     depends_on:
@@ -100,12 +100,12 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-bus_booking}
       OLLAMA_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:9b}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
       CHROMA_PATH: /data/chroma
       TZ: Asia/Kuala_Lumpur
     ports:
-      - "7500:8000"
+      - "6500:8000"
     networks:
       - bus_agent_net
     depends_on:

@@ -6,8 +6,11 @@ bookings that have exceeded their payment deadline and cancels them.
 """
 
 import asyncio
+import logging
 from datetime import datetime
 from contextlib import asynccontextmanager
+
+logger = logging.getLogger(__name__)
 
 # Check interval in seconds (check every 30 seconds)
 CHECK_INTERVAL_SECONDS = 30
@@ -28,7 +31,7 @@ class PaymentDeadlineScheduler:
         self._running = True
         self._db_session_factory = db_session_factory
         self._task = asyncio.create_task(self._run_loop())
-        print("[Scheduler] Payment deadline checker started.")
+        logger.info("[Scheduler] Payment deadline checker started.")
 
     async def stop(self):
         """Stop the background scheduler."""
@@ -39,7 +42,7 @@ class PaymentDeadlineScheduler:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        print("[Scheduler] Payment deadline checker stopped.")
+        logger.info("[Scheduler] Payment deadline checker stopped.")
 
     async def _run_loop(self):
         """Main scheduler loop."""
@@ -53,13 +56,13 @@ class PaymentDeadlineScheduler:
                 try:
                     cancelled_ids = crud.cancel_expired_bookings(db)
                     if cancelled_ids:
-                        print(f"[Scheduler] {datetime.now().strftime('%H:%M:%S')} - "
-                              f"Cancelled {len(cancelled_ids)} expired bookings")
+                        logger.info(f"[Scheduler] {datetime.now().strftime('%H:%M:%S')} - "
+                                    f"Cancelled {len(cancelled_ids)} expired bookings")
                 finally:
                     db.close()
 
             except Exception as e:
-                print(f"[Scheduler] Error in deadline check: {e}")
+                logger.error(f"[Scheduler] Error in deadline check: {e}")
 
             # Wait before next check
             await asyncio.sleep(CHECK_INTERVAL_SECONDS)
