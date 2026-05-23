@@ -139,7 +139,7 @@ async def _send_text(phone: str, text: str):
 async def _handle_image(phone: str, media_id: str, session: dict):
     booking_id = session.get("pending_receipt_booking_id")
 
-    if not booking_id:
+    if booking_id is None:
         session["awaiting_booking_id"] = True
         sessions.set(phone, session)
         await _send_text(phone, "I received your receipt image! Please reply with your booking ID (e.g. 42).")
@@ -182,17 +182,22 @@ async def _handle_image(phone: str, media_id: str, session: dict):
         return
 
     if upload_resp.status_code == 200:
-        result = upload_resp.json()
-        if result["status"] == "verified":
-            await _send_text(phone, f"✅ Payment verified! Booking #{booking_id} is confirmed. Safe travels!")
-        else:
-            await _send_text(phone, f"❌ Receipt rejected: {result['message']}. Please check and resend.")
+        try:
+            result = upload_resp.json()
+            if result.get("status") == "verified":
+                await _send_text(phone, f"✅ Payment verified! Booking #{booking_id} is confirmed. Safe travels!")
+                session.pop("pending_receipt_booking_id", None)
+                sessions.set(phone, session)
+            else:
+                msg = result.get("message", "please try again")
+                await _send_text(phone, f"❌ Receipt rejected: {msg}. Please check and resend.")
+                session.pop("pending_receipt_booking_id", None)
+                sessions.set(phone, session)
+        except (ValueError, KeyError):
+            await _send_text(phone, "Failed to verify receipt. Please try again.")
     else:
         await _send_text(phone, "Failed to verify receipt. Please try again.")
-
-    # Clear pending receipt state
-    session.pop("pending_receipt_booking_id", None)
-    sessions.set(phone, session)
+        # Do NOT clear session on non-200 — let user retry with same booking ID
 
 
 @app.get("/webhook")
