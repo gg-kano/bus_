@@ -5,7 +5,7 @@ from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 import httpx
 
-VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN", "busgo_secret")
+VERIFY_TOKEN = os.environ["WEBHOOK_VERIFY_TOKEN"]
 WA_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
 WA_PHONE_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 FASTAPI_URL = os.getenv("FASTAPI_URL", "http://fastapi:8000")

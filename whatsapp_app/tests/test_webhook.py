@@ -1,8 +1,6 @@
 import pytest
 import os
 import sys
-import respx
-from httpx import Response
 from starlette.testclient import TestClient
 from unittest.mock import patch
 
