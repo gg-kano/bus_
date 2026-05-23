@@ -71,25 +71,24 @@ services:
       - ./utils:/utils                           # share utils module
       - ./image:/image
 
-  chat:
+  whatsapp:
     build:
-      context: ./chat_app
+      context: ./whatsapp_app
       dockerfile: Dockerfile
-    container_name: bus_chat
+    container_name: bus_whatsapp
     restart: unless-stopped
     environment:
       FASTAPI_URL: http://fastapi:8000
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID}
+      WEBHOOK_VERIFY_TOKEN: ${WEBHOOK_VERIFY_TOKEN}
       TZ: Asia/Kuala_Lumpur
     ports:
-      - "6502:8502"
+      - "8080:8080"
     networks:
       - bus_agent_net
     depends_on:
       - fastapi
-    volumes:
-      - ./chat_app:/app                          # hot reload
-      - ./utils:/utils                           # share utils module
-      - ./image:/image
 
   fastapi:
     build:
