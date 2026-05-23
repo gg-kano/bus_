@@ -137,8 +137,62 @@ async def _send_text(phone: str, text: str):
 
 
 async def _handle_image(phone: str, media_id: str, session: dict):
-    # Implemented in full in Task 5 — stub to prevent NameError on image messages
-    await _send_text(phone, "I received your image! Please send it again after the full update.")
+    booking_id = session.get("pending_receipt_booking_id")
+
+    if not booking_id:
+        session["awaiting_booking_id"] = True
+        sessions.set(phone, session)
+        await _send_text(phone, "I received your receipt image! Please reply with your booking ID (e.g. 42).")
+        return
+
+    headers = {"Authorization": f"Bearer {WA_TOKEN}"}
+    try:
+        async with httpx.AsyncClient() as client:
+            # Step 1: Get media URL from Meta
+            meta_resp = await client.get(
+                f"https://graph.facebook.com/v22.0/{media_id}",
+                headers=headers,
+                timeout=30,
+            )
+            if meta_resp.status_code != 200:
+                await _send_text(phone, "Failed to download your receipt. Please try again.")
+                return
+
+            media_url = meta_resp.json()["url"]
+
+            # Step 2: Download image bytes
+            media_resp = await client.get(media_url, headers=headers, timeout=30)
+            if media_resp.status_code != 200:
+                await _send_text(phone, "Failed to download your receipt. Please try again.")
+                return
+
+            content_type = media_resp.headers.get("content-type", "image/jpeg")
+            ext = content_type.split("/")[-1].split(";")[0]
+
+            # Step 3: Upload to FastAPI
+            files = {"file": (f"receipt.{ext}", media_resp.content, content_type)}
+            upload_resp = await client.post(
+                f"{FASTAPI_URL}/bookings/{booking_id}/receipt",
+                files=files,
+                timeout=120,
+            )
+    except httpx.HTTPError as e:
+        logger.error("Receipt upload error: %s", e)
+        await _send_text(phone, "Failed to process your receipt. Please try again.")
+        return
+
+    if upload_resp.status_code == 200:
+        result = upload_resp.json()
+        if result["status"] == "verified":
+            await _send_text(phone, f"✅ Payment verified! Booking #{booking_id} is confirmed. Safe travels!")
+        else:
+            await _send_text(phone, f"❌ Receipt rejected: {result['message']}. Please check and resend.")
+    else:
+        await _send_text(phone, "Failed to verify receipt. Please try again.")
+
+    # Clear pending receipt state
+    session.pop("pending_receipt_booking_id", None)
+    sessions.set(phone, session)
 
 
 @app.get("/webhook")

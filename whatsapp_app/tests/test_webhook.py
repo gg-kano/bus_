@@ -137,3 +137,98 @@ def test_text_message_no_messages_key(client):
     resp = client.post("/webhook", json=payload)
     assert resp.status_code == 200
     assert resp.json() == {"status": "no_messages"}
+
+
+# ── POST /webhook — image (receipt) messages ───────────────────────────────────
+
+def whatsapp_image_payload(from_phone: str, media_id: str) -> dict:
+    return {
+        "entry": [{
+            "changes": [{
+                "value": {
+                    "messages": [{
+                        "from": from_phone,
+                        "type": "image",
+                        "image": {"id": media_id, "mime_type": "image/jpeg"},
+                        "id": "msg_002",
+                    }]
+                }
+            }]
+        }]
+    }
+
+
+@respx.mock
+def test_image_without_booking_id_asks_for_id(client, app):
+    """Image sent without pending booking ID → bot asks for booking ID."""
+    respx.post("http://test-fastapi:8000/auth/login").mock(
+        return_value=Response(200, json={"id": 10, "name": "60199", "phone": "60199"})
+    )
+    respx.post("https://graph.facebook.com/v22.0/123456/messages").mock(
+        return_value=Response(200, json={})
+    )
+
+    resp = client.post("/webhook", json=whatsapp_image_payload("60199", "media_abc"))
+    assert resp.status_code == 200
+
+    # Check the reply message asked for booking ID
+    send_call = respx.calls[-1]
+    body = send_call.request.content.decode()
+    assert "booking" in body.lower()
+
+
+@respx.mock
+def test_image_with_pending_booking_id_uploads_receipt(client, app):
+    """Image sent when booking ID is pending → downloads and uploads receipt."""
+    m = sys.modules["main"]
+    m.sessions.set("60188", {"passenger_id": 7, "pending_receipt_booking_id": 42})
+
+    media_bytes = b"fake_image_data"
+
+    respx.get("https://graph.facebook.com/v22.0/media_xyz").mock(
+        return_value=Response(200, json={"url": "https://cdn.meta.com/media_xyz", "mime_type": "image/jpeg"})
+    )
+    respx.get("https://cdn.meta.com/media_xyz").mock(
+        return_value=Response(200, content=media_bytes, headers={"content-type": "image/jpeg"})
+    )
+    respx.post("http://test-fastapi:8000/bookings/42/receipt").mock(
+        return_value=Response(200, json={"status": "verified", "message": "Payment confirmed!"})
+    )
+    respx.post("https://graph.facebook.com/v22.0/123456/messages").mock(
+        return_value=Response(200, json={})
+    )
+
+    resp = client.post("/webhook", json=whatsapp_image_payload("60188", "media_xyz"))
+    assert resp.status_code == 200
+
+    # Check confirmation message was sent
+    send_call = respx.calls[-1]
+    body = send_call.request.content.decode()
+    assert "verified" in body.lower() or "confirmed" in body.lower()
+
+
+@respx.mock
+def test_image_rejected_receipt_sends_error_message(client, app):
+    """Rejected receipt → bot sends rejection reason."""
+    m = sys.modules["main"]
+    m.sessions.set("60177", {"passenger_id": 3, "pending_receipt_booking_id": 99})
+
+    respx.get("https://graph.facebook.com/v22.0/media_bad").mock(
+        return_value=Response(200, json={"url": "https://cdn.meta.com/media_bad", "mime_type": "image/jpeg"})
+    )
+    respx.get("https://cdn.meta.com/media_bad").mock(
+        return_value=Response(200, content=b"bad_img", headers={"content-type": "image/jpeg"})
+    )
+    respx.post("http://test-fastapi:8000/bookings/99/receipt").mock(
+        return_value=Response(200, json={"status": "rejected", "message": "Amount mismatch"})
+    )
+    respx.post("https://graph.facebook.com/v22.0/123456/messages").mock(
+        return_value=Response(200, json={})
+    )
+
+    resp = client.post("/webhook", json=whatsapp_image_payload("60177", "media_bad"))
+    assert resp.status_code == 200
+
+    send_call = respx.calls[-1]
+    body = send_call.request.content.decode()
+    assert "rejected" in body.lower() or "amount mismatch" in body.lower()
