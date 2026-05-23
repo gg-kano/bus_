@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 from collections import OrderedDict
@@ -11,6 +12,8 @@ WA_PHONE_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 FASTAPI_URL = os.getenv("FASTAPI_URL", "http://fastapi:8000")
 
 app = FastAPI(title="WhatsApp Webhook")
+
+logger = logging.getLogger(__name__)
 
 
 class TTLDict:
@@ -54,15 +57,22 @@ async def receive_message(request: Request):
 
     # Auto-register on first contact
     if "passenger_id" not in session:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{FASTAPI_URL}/auth/login",
-                json={"name": from_phone, "phone": from_phone},
-                timeout=10,
-            )
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{FASTAPI_URL}/auth/login",
+                    json={"name": from_phone, "phone": from_phone},
+                    timeout=10,
+                )
             if resp.status_code == 200:
                 session["passenger_id"] = resp.json()["id"]
                 sessions.set(from_phone, session)
+            else:
+                await _send_text(from_phone, "Sorry, I could not register your account. Please try again.")
+                return {"status": "ok"}
+        except httpx.HTTPError:
+            await _send_text(from_phone, "Sorry, the service is temporarily unavailable. Please try again.")
+            return {"status": "ok"}
 
     if msg_type == "text":
         await _handle_text(from_phone, message["text"]["body"], session)
@@ -86,36 +96,49 @@ async def _handle_text(phone: str, text: str, session: dict):
             await _send_text(phone, "Please reply with a valid booking ID number (e.g. 42).")
             return
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{FASTAPI_URL}/chat",
-            json={
-                "message": text,
-                "session_id": phone,
-                "passenger_id": session.get("passenger_id"),
-            },
-            timeout=60,
-        )
-    if resp.status_code == 200:
-        await _send_text(phone, resp.json()["reply"])
-    else:
-        await _send_text(phone, "Sorry, something went wrong. Please try again.")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{FASTAPI_URL}/chat",
+                json={
+                    "message": text,
+                    "session_id": phone,
+                    "passenger_id": session.get("passenger_id"),
+                },
+                timeout=60,
+            )
+        if resp.status_code == 200:
+            await _send_text(phone, resp.json()["reply"])
+        else:
+            await _send_text(phone, "Sorry, something went wrong. Please try again.")
+    except httpx.HTTPError:
+        await _send_text(phone, "Sorry, the service is temporarily unavailable. Please try again.")
 
 
 async def _send_text(phone: str, text: str):
     headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"https://graph.facebook.com/v22.0/{WA_PHONE_ID}/messages",
-            headers=headers,
-            json={
-                "messaging_product": "whatsapp",
-                "to": phone,
-                "type": "text",
-                "text": {"body": text},
-            },
-            timeout=30,
-        )
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://graph.facebook.com/v22.0/{WA_PHONE_ID}/messages",
+                headers=headers,
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": phone,
+                    "type": "text",
+                    "text": {"body": text[:4096]},
+                },
+                timeout=30,
+            )
+        if resp.status_code != 200:
+            logger.error("Meta API send failed: status=%s body=%s", resp.status_code, resp.text)
+    except httpx.HTTPError as e:
+        logger.error("Meta API send error: %s", e)
+
+
+async def _handle_image(phone: str, media_id: str, session: dict):
+    # Implemented in full in Task 5 — stub to prevent NameError on image messages
+    await _send_text(phone, "I received your image! Please send it again after the full update.")
 
 
 @app.get("/webhook")

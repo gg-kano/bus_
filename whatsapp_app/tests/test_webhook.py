@@ -1,6 +1,9 @@
+import json as _json
 import pytest
 import os
 import sys
+import respx
+from httpx import Response
 from starlette.testclient import TestClient
 from unittest.mock import patch
 
@@ -57,9 +60,6 @@ def test_webhook_verification_wrong_mode(client):
     assert resp.status_code == 403
 
 
-import respx
-from httpx import Response
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def whatsapp_text_payload(from_phone: str, text: str) -> dict:
@@ -98,9 +98,14 @@ def test_text_message_auto_login_and_chat(client):
     resp = client.post("/webhook", json=whatsapp_text_payload("60123456789", "hi"))
 
     assert resp.status_code == 200
-    # Verify /chat was called with correct payload
-    chat_call = respx.calls.last
-    assert chat_call is not None
+    # Verify /auth/login was called first
+    assert any("/auth/login" in str(c.request.url) for c in respx.calls)
+    # Verify /chat was called with correct passenger_id
+    chat_calls = [c for c in respx.calls if "/chat" in str(c.request.url)]
+    assert len(chat_calls) == 1
+    chat_body = _json.loads(chat_calls[0].request.content)
+    assert chat_body["passenger_id"] == 99
+    assert chat_body["message"] == "hi"
 
 
 @respx.mock
